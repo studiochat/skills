@@ -45,7 +45,6 @@ All API calls require an API key. The scripts read credentials from environment 
 
 | Variable | Description |
 |----------|-------------|
-| `STUDIO_API_URL` | Base URL for the API (e.g., `https://api.studiochat.io`) |
 | `STUDIO_API_TOKEN` | API key (starts with `sbs_`) |
 | `STUDIO_PROJECT_ID` | UUID of the project to analyze/manage |
 
@@ -59,7 +58,6 @@ API keys are available by request. Contact the Studio Chat team:
 Once you have a key, set the environment variables before using the skills:
 
 ```bash
-export STUDIO_API_URL="https://api.studiochat.io"
 export STUDIO_API_TOKEN="sbs_your_api_key_here"
 export STUDIO_PROJECT_ID="your-project-uuid"
 ```

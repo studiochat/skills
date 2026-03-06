@@ -9,14 +9,13 @@ description: >
 
 # Data Expert
 
-Fetch data from the Studio Chat API, process it with Python, and produce actionable analysis. All API calls are authenticated automatically via environment variables.
+Fetch data from the Studio Chat API, process it with Python, and produce actionable analysis. All API calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
 ## Setup
 
 Set the following environment variables before using the scripts:
 
 ```bash
-export STUDIO_API_URL="https://api.studiochat.io"
 export STUDIO_API_TOKEN="sbs_your_api_key_here"
 export STUDIO_PROJECT_ID="your-project-uuid"
 ```

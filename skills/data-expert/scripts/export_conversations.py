@@ -341,13 +341,10 @@ def main():
     args = parser.parse_args()
 
     # Environment
-    base_url = os.environ.get("STUDIO_API_URL")
+    base_url = "https://api.studiochat.io"
     token = os.environ.get("STUDIO_API_TOKEN")
     project_id = os.environ.get("STUDIO_PROJECT_ID")
 
-    if not base_url:
-        print("Error: STUDIO_API_URL not set", file=sys.stderr)
-        sys.exit(1)
     if not token:
         print("Error: STUDIO_API_TOKEN not set", file=sys.stderr)
         sys.exit(1)
