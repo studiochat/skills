@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Authenticated fetch utility for Studio Chat API.
 
-Reads STUDIO_API_URL and STUDIO_API_TOKEN from environment variables
+Reads STUDIO_API_TOKEN from environment variables
 so credentials never appear in command output or logs.
 
 Usage:
@@ -41,12 +41,9 @@ def main():
     parser.add_argument("-o", "--output", default=None, help="Output file path (default: stdout)")
     args = parser.parse_args()
 
-    api_url = os.environ.get("STUDIO_API_URL")
+    api_url = "https://api.studiochat.io"
     api_token = os.environ.get("STUDIO_API_TOKEN")
 
-    if not api_url:
-        print("Error: STUDIO_API_URL not set", file=sys.stderr)
-        sys.exit(1)
     if not api_token:
         print("Error: STUDIO_API_TOKEN not set", file=sys.stderr)
         sys.exit(1)
