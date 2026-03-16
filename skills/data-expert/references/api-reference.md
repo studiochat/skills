@@ -26,6 +26,9 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [Project Settings](#project-settings)
 - [Schedule](#schedule)
 - [API Tools](#api-tools)
+- [Resource Analytics — API Tool Usage](#resource-analytics--api-tool-usage)
+- [Resource Analytics — Toolkit Usage](#resource-analytics--toolkit-usage)
+- [Custom Toolkits Reference](#custom-toolkits-reference)
 - [Analyst Conversations](#analyst-conversations)
 
 ---
@@ -634,6 +637,214 @@ Returns custom HTTP integrations configured for the project.
 `GET /projects/{pid}/api-tools/{tool_id}`
 
 Returns full tool configuration: URL, method, headers, parameters.
+
+---
+
+## Resource Analytics — API Tool Usage
+
+### API Tool Analytics
+
+`GET /projects/{pid}/analytics/api-tools`
+
+Aggregated usage metrics for custom API tool executions.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_tool_id` | string | | Filter by specific API tool UUID |
+| `start_date` | string | | Start date (`YYYY-MM-DD`) |
+| `end_date` | string | | End date (`YYYY-MM-DD`) |
+| `limit` | int | 50 | Max recent items (1-500) |
+| `offset` | int | 0 | Pagination offset for recent items |
+| `search` | string | | Search in input_params, output_result, conversation_id, error_message |
+
+**Response fields:**
+
+```
+total_calls             int     Total executions
+successful_calls        int     Successful executions
+failed_calls            int     Failed executions
+avg_duration_ms         float   Average execution time (ms), null if no data
+tool_config             object  {method, url} — only present when api_tool_id is set
+time_series             array   Daily buckets
+  date                  string  YYYY-MM-DD
+  count                 int     Total calls that day
+  success_count         int     Successful calls that day
+  avg_duration_ms       float   Avg duration that day (null if none)
+recent                  array   Recent executions (paginated)
+  id                    string  Log entry UUID
+  tool_name             string  API tool name
+  input_params          object  Request parameters sent
+  output_result         object  Response received
+  request_meta          object  HTTP metadata (status, headers)
+  success               bool    Whether execution succeeded
+  error_message         string  Error details (null if success)
+  duration_ms           int     Execution time (ms)
+  created_at            string  ISO 8601 timestamp
+  conversation_id       string  Conversation that triggered it (null if manual)
+```
+
+### API Tool Sparklines
+
+`GET /projects/{pid}/analytics/api-tools/sparklines`
+
+Lightweight batch endpoint returning per-tool daily counts for sparkline charts.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `days` | int | 14 | Trailing days (1-90) |
+
+**Response:** `dict[tool_id → SparklineItem]`
+
+```
+{tool_id}               object
+  total                 int     Total calls in period
+  series                array   Daily data points
+    date                string  YYYY-MM-DD
+    count               int     Calls that day
+```
+
+---
+
+## Resource Analytics — Toolkit Usage
+
+### Toolkit Analytics
+
+`GET /projects/{pid}/analytics/toolkits`
+
+Aggregated usage metrics for integration toolkit action executions.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `toolkit_slug` | string | | Filter by toolkit slug |
+| `action_name` | string | | Filter by specific action |
+| `start_date` | string | | Start date (`YYYY-MM-DD`) |
+| `end_date` | string | | End date (`YYYY-MM-DD`) |
+| `limit` | int | 50 | Max recent items (1-500) |
+| `offset` | int | 0 | Pagination offset for recent items |
+| `search` | string | | Search in input_params, output_result, conversation_id, action_name, error_message |
+| `param_filter` | string | | Filter by input_params JSON `key:value` (e.g., `ticket_type_id:67`) |
+
+**Response fields:**
+
+```
+total_calls             int     Total executions
+successful_calls        int     Successful executions
+failed_calls            int     Failed executions
+avg_duration_ms         float   Average execution time (ms), null if no data
+by_action               array   Breakdown by action name
+  action_name           string  Action slug
+  count                 int     Total calls
+  success_count         int     Successful calls
+by_param                array   Breakdown by input param value (only when param_filter key is set)
+  value                 string  Parameter value
+  count                 int     Occurrences
+time_series             array   Daily buckets
+  date                  string  YYYY-MM-DD
+  count                 int     Total calls that day
+  success_count         int     Successful calls that day
+recent                  array   Recent executions (paginated)
+  id                    string  Log entry UUID
+  toolkit_slug          string  Toolkit identifier
+  action_name           string  Action that was executed
+  input_params          object  Parameters sent to the action
+  output_result         object  Response from the action
+  success               bool    Whether execution succeeded
+  error_message         string  Error details (null if success)
+  duration_ms           int     Execution time (ms)
+  created_at            string  ISO 8601 timestamp
+  conversation_id       string  Conversation that triggered it (null if manual)
+```
+
+### Toolkit Sparklines
+
+`GET /projects/{pid}/analytics/toolkit-calls/sparklines`
+
+Lightweight batch endpoint returning per-toolkit daily counts for sparkline charts.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `days` | int | 14 | Trailing days (1-90) |
+
+**Response:** `dict[toolkit_slug → SparklineItem]`
+
+```
+{toolkit_slug}          object
+  total                 int     Total calls in period
+  series                array   Daily data points
+    date                string  YYYY-MM-DD
+    count               int     Calls that day
+```
+
+---
+
+## Custom Toolkits Reference
+
+Custom toolkits are project-scoped integrations with third-party APIs. Each toolkit has a unique slug used in analytics endpoints (`toolkit_slug` parameter) and usage logs.
+
+### Registered Toolkits
+
+| Toolkit | Slug | Auth Type | Description |
+|---------|------|-----------|-------------|
+| Slack | `SLACK` | api_key (bot token) | Send messages to Slack channels |
+| Intercom Tickets | `INTERCOM_TICKETS` | api_key | Create Intercom support tickets |
+
+### Slack — Tools
+
+| Tool Slug | Description |
+|-----------|-------------|
+| `SLACK_SEND_MESSAGE` | Send a message to a Slack channel |
+
+**Parameters for `SLACK_SEND_MESSAGE`:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `channel` | string | Yes | Slack channel ID (pre-configured from channel list) |
+| `message` | string | Yes | Message text to send |
+
+### Intercom Tickets — Tools
+
+| Tool Slug | Description |
+|-----------|-------------|
+| `INTERCOM_TICKETS_CREATE_TICKET` | Create a new Intercom support ticket |
+
+**Parameters for `INTERCOM_TICKETS_CREATE_TICKET`:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ticket_type_id` | string | Yes | Intercom ticket type ID (pre-configured from type list) |
+| `contact_email` | string | Yes | Email of the contact to associate the ticket with |
+| `title` | string | Yes | Ticket title |
+| `description` | string | No | Ticket body/description |
+| *(dynamic)* | varies | varies | Custom attributes defined per ticket type in Intercom |
+
+### Using Toolkit Slugs in Analytics
+
+When querying resource analytics, use the toolkit slug and tool slug as filters:
+
+```bash
+# All Slack usage
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" --params toolkit_slug=SLACK
+
+# Specific Slack action
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=SLACK action_name=SLACK_SEND_MESSAGE
+
+# All Intercom ticket creations
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=INTERCOM_TICKETS action_name=INTERCOM_TICKETS_CREATE_TICKET
+
+# Intercom tickets filtered by ticket type
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=INTERCOM_TICKETS param_filter=ticket_type_id:67
+```
 
 ---
 

@@ -3,8 +3,9 @@ name: data-expert
 description: >
   Analyze customer conversation data, compute metrics, identify patterns, and generate reports
   using the Studio Chat Analytics API. Use when asked to analyze conversations, review performance,
-  understand trends, examine deflection rates, sentiment distributions, handoff patterns, or any
-  data analysis task involving platform activity.
+  understand trends, examine deflection rates, sentiment distributions, handoff patterns, API tool
+  usage, toolkit usage, resource analytics, sparklines, or any data analysis task involving
+  platform activity.
 ---
 
 # Data Expert
@@ -80,6 +81,15 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 | `POST /projects/{pid}/conversations/insights/trending-topics/generate` | Start new topic analysis |
 | `GET /projects/{pid}/conversations/insights/trending-topics/job/{jid}` | Poll job progress |
 | `GET /projects/{pid}/conversations/insights/trending-topics/analysis/{aid}` | Completed topic analysis |
+
+### Resource Analytics
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /projects/{pid}/analytics/api-tools` | API tool usage: totals, success/fail, avg duration, time series, recent calls |
+| `GET /projects/{pid}/analytics/api-tools/sparklines` | Lightweight per-tool daily counts for sparklines (trailing N days) |
+| `GET /projects/{pid}/analytics/toolkits` | Toolkit usage: totals, success/fail, by-action breakdown, param breakdown, time series, recent calls |
+| `GET /projects/{pid}/analytics/toolkit-calls/sparklines` | Lightweight per-toolkit daily counts for sparklines (trailing N days) |
 
 ### Configuration Context
 
@@ -229,6 +239,68 @@ python3 scripts/fetch.py \
 python3 scripts/fetch.py "/projects/$STUDIO_PROJECT_ID/conversations/insights/trending-topics/job/JOB_ID"
 ```
 
+### 7. Resource Analytics — API Tools & Toolkits
+
+```bash
+# API tool usage overview (all tools)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/api-tools" \
+  --params start_date=2025-01-01 end_date=2025-02-01 \
+  -o api_tool_usage.json
+
+# API tool usage for a specific tool
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/api-tools" \
+  --params api_tool_id=TOOL_UUID start_date=2025-01-01 end_date=2025-02-01 \
+  -o api_tool_detail.json
+
+# API tool sparklines (lightweight, trailing 14 days by default)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/api-tools/sparklines" \
+  -o api_tool_sparklines.json
+
+# Sparklines with custom window (e.g., 30 days)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/api-tools/sparklines" \
+  --params days=30 \
+  -o api_tool_sparklines_30d.json
+
+# Toolkit usage overview (all toolkits)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params start_date=2025-01-01 end_date=2025-02-01 \
+  -o toolkit_usage.json
+
+# Toolkit usage for a specific toolkit
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=TOOLKIT_SLUG start_date=2025-01-01 end_date=2025-02-01 \
+  -o toolkit_detail.json
+
+# Toolkit usage filtered by action
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=TOOLKIT_SLUG action_name=ACTION_NAME \
+  -o toolkit_action_usage.json
+
+# Toolkit usage with param_filter (filter by input param key:value)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=TOOLKIT_SLUG param_filter=ticket_type_id:67 \
+  -o toolkit_param_filtered.json
+
+# Toolkit sparklines (lightweight, trailing 14 days by default)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/toolkit-calls/sparklines" \
+  -o toolkit_sparklines.json
+
+# Search recent toolkit calls by keyword
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=TOOLKIT_SLUG search=error limit=20 \
+  -o toolkit_errors.json
+```
+
 ---
 
 ## Analysis Recipes
@@ -269,6 +341,71 @@ for label in ["positive", "neutral", "negative"]:
     count = sent.get(label, 0)
     pct = (count / total_scored * 100) if total_scored else 0
     print(f"  {label}: {count} ({pct:.1f}%)")
+```
+
+### API Tool Usage Analysis
+
+```python
+import json
+
+with open("api_tool_usage.json") as f:
+    data = json.load(f)
+
+print(f"Total calls: {data['total_calls']}")
+print(f"Success: {data['successful_calls']} | Failed: {data['failed_calls']}")
+if data['avg_duration_ms']:
+    print(f"Avg duration: {data['avg_duration_ms']:.0f}ms")
+
+success_rate = (data['successful_calls'] / data['total_calls'] * 100) if data['total_calls'] else 0
+print(f"Success rate: {success_rate:.1f}%")
+
+print("\nDaily trend:")
+for pt in data.get("time_series", []):
+    print(f"  {pt['date']}: {pt['count']} calls ({pt['success_count']} ok)")
+```
+
+### Toolkit Action Breakdown
+
+```python
+import json
+
+with open("toolkit_usage.json") as f:
+    data = json.load(f)
+
+print(f"Total calls: {data['total_calls']}")
+print(f"Success: {data['successful_calls']} | Failed: {data['failed_calls']}")
+
+print("\nBy Action:")
+for action in data.get("by_action", []):
+    rate = (action['success_count'] / action['count'] * 100) if action['count'] else 0
+    print(f"  {action['action_name']}: {action['count']} calls ({rate:.0f}% success)")
+
+print("\nRecent failures:")
+for item in data.get("recent", []):
+    if not item['success']:
+        print(f"  [{item['created_at']}] {item['action_name']}: {item.get('error_message', 'unknown')}")
+```
+
+### Sparkline Overview (All Tools at a Glance)
+
+```python
+import json
+
+with open("api_tool_sparklines.json") as f:
+    sparklines = json.load(f)
+
+print("API Tool activity (last 14 days):")
+for tool_id, item in sorted(sparklines.items(), key=lambda x: x[1]['total'], reverse=True):
+    trend = " ".join(str(pt['count']) for pt in item['series'][-7:])
+    print(f"  {tool_id}: {item['total']} total | last 7d: [{trend}]")
+
+with open("toolkit_sparklines.json") as f:
+    sparklines = json.load(f)
+
+print("\nToolkit activity (last 14 days):")
+for slug, item in sorted(sparklines.items(), key=lambda x: x[1]['total'], reverse=True):
+    trend = " ".join(str(pt['count']) for pt in item['series'][-7:])
+    print(f"  {slug}: {item['total']} total | last 7d: [{trend}]")
 ```
 
 ---
