@@ -28,6 +28,7 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [API Tools](#api-tools)
 - [Resource Analytics — API Tool Usage](#resource-analytics--api-tool-usage)
 - [Resource Analytics — Toolkit Usage](#resource-analytics--toolkit-usage)
+- [Custom Toolkits Reference](#custom-toolkits-reference)
 - [Analyst Conversations](#analyst-conversations)
 
 ---
@@ -780,6 +781,69 @@ Lightweight batch endpoint returning per-toolkit daily counts for sparkline char
   series                array   Daily data points
     date                string  YYYY-MM-DD
     count               int     Calls that day
+```
+
+---
+
+## Custom Toolkits Reference
+
+Custom toolkits are project-scoped integrations with third-party APIs. Each toolkit has a unique slug used in analytics endpoints (`toolkit_slug` parameter) and usage logs.
+
+### Registered Toolkits
+
+| Toolkit | Slug | Auth Type | Description |
+|---------|------|-----------|-------------|
+| Slack | `SLACK` | api_key (bot token) | Send messages to Slack channels |
+| Intercom Tickets | `INTERCOM_TICKETS` | api_key | Create Intercom support tickets |
+
+### Slack — Tools
+
+| Tool Slug | Description |
+|-----------|-------------|
+| `SLACK_SEND_MESSAGE` | Send a message to a Slack channel |
+
+**Parameters for `SLACK_SEND_MESSAGE`:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `channel` | string | Yes | Slack channel ID (pre-configured from channel list) |
+| `message` | string | Yes | Message text to send |
+
+### Intercom Tickets — Tools
+
+| Tool Slug | Description |
+|-----------|-------------|
+| `INTERCOM_TICKETS_CREATE_TICKET` | Create a new Intercom support ticket |
+
+**Parameters for `INTERCOM_TICKETS_CREATE_TICKET`:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ticket_type_id` | string | Yes | Intercom ticket type ID (pre-configured from type list) |
+| `contact_email` | string | Yes | Email of the contact to associate the ticket with |
+| `title` | string | Yes | Ticket title |
+| `description` | string | No | Ticket body/description |
+| *(dynamic)* | varies | varies | Custom attributes defined per ticket type in Intercom |
+
+### Using Toolkit Slugs in Analytics
+
+When querying resource analytics, use the toolkit slug and tool slug as filters:
+
+```bash
+# All Slack usage
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" --params toolkit_slug=SLACK
+
+# Specific Slack action
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=SLACK action_name=SLACK_SEND_MESSAGE
+
+# All Intercom ticket creations
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=INTERCOM_TICKETS action_name=INTERCOM_TICKETS_CREATE_TICKET
+
+# Intercom tickets filtered by ticket type
+fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
+  --params toolkit_slug=INTERCOM_TICKETS param_filter=ticket_type_id:67
 ```
 
 ---
