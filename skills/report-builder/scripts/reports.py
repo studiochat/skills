@@ -60,10 +60,11 @@ def _request(method, path, body=None, params=None):
     if params:
         url += "?" + urlencode(params)
 
-    headers = {
-        "Authorization": f"Bearer {API_TOKEN}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    if API_TOKEN.startswith("sbs_") or API_TOKEN.startswith("kps_"):
+        headers["X-API-Key"] = API_TOKEN
+    else:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
 
     data = json.dumps(body).encode() if body else None
     req = Request(url, data=data, headers=headers, method=method)

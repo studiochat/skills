@@ -116,15 +116,19 @@ When the user wants a scheduled report:
 
 ## Writing Good Instructions
 
-The report is executed by SAMI with the `data-expert` skill. Instructions should tell SAMI *what* to analyze, not *how* — SAMI knows how to use the analytics API.
+The report sandbox already has the `data-expert` skill loaded. This means SAMI already knows how to fetch conversations, compute metrics, call the analytics API, and process data. **Do not include API endpoints, scripts, or fetch instructions in the report instructions.**
+
+Instructions define **what** to analyze and **what output** to produce — never **how** to get the data.
 
 ### Instruction Principles
 
-1. **Be specific about metrics** — Name the KPIs: deflection rate, sentiment distribution, handoff rate, response time, conversation volume
-2. **Specify comparisons** — "Compare to the previous period" gives context to the numbers
-3. **Name the playbooks** — Even if filtered via `playbook_base_ids`, mention them by name in instructions for clarity
-4. **Ask for actionable insights** — "Identify top 3 issues" is better than "analyze everything"
-5. **Structure the output** — "Start with key metrics, then breakdown by topic, then recommendations"
+1. **Describe the analysis, not the implementation** — "Show deflection rate by playbook" is correct. "Call GET /projects/.../analytics" is wrong — the data-expert skill handles that.
+2. **Be specific about metrics** — Name the KPIs: deflection rate, sentiment distribution, handoff rate, response time, conversation volume
+3. **Specify comparisons** — "Compare to the previous period" gives context to the numbers
+4. **Name the playbooks** — Even if filtered via `playbook_base_ids`, mention them by name for clarity
+5. **Ask for actionable insights** — "Identify top 3 issues" is better than "analyze everything"
+6. **Structure the output** — "Start with key metrics, then breakdown by topic, then recommendations"
+7. **Never include technical details** — No URLs, no script paths, no API tokens. The execution environment handles all of that.
 
 ### Example Instructions
 
