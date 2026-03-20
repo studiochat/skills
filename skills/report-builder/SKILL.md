@@ -54,14 +54,39 @@ python3 scripts/reports.py runs <report_id>
 python3 scripts/reports.py run-status <run_id>
 ```
 
-## Workflow
+## Workflows
 
-1. **Discover** — List playbooks to know which assistants are available
-2. **Design** — Craft instructions based on what the user wants to analyze
-3. **Create** — Create the report definition with the right configuration
-4. **Test** — Trigger a manual run to validate the output
-5. **Schedule** — If the user wants recurring reports, set a cron schedule
-6. **Deliver** — Configure Slack channel for automatic PDF delivery
+### One-Off Report
+
+When the user asks for a single report ("generate a report of last week's conversations"), create it and run it immediately:
+
+1. **Discover** — List playbooks to identify which assistants to include
+2. **Create** — Create a manual report definition with the right instructions and time window
+3. **Run** — Immediately trigger a manual run
+4. **Monitor** — Poll `run-status` until completed (check every 15–20 seconds)
+5. **Deliver** — Share the result: the report is viewable in the Reports UI
+
+```bash
+# One-off: create + run in sequence
+python3 scripts/reports.py create --name "Ad-hoc: Last 7 days" \
+  --instructions "..." --window 7 --playbooks BASE_ID
+# Note the report ID from output, then:
+python3 scripts/reports.py run REPORT_ID --window 7
+# Monitor:
+python3 scripts/reports.py run-status RUN_ID
+```
+
+If the user also wants the PDF on Slack, add `--slack "#channel"` to the create command.
+
+### Recurring Report
+
+When the user wants a scheduled report:
+
+1. **Discover** — List playbooks
+2. **Design** — Craft instructions based on what the user wants
+3. **Create** — Create with `--schedule cron --cron "EXPRESSION"` and optionally `--slack "#channel"`
+4. **Test** — Trigger a manual run to validate before the first scheduled execution
+5. **Iterate** — Update instructions if the test output needs adjustments
 
 ## Report Configuration
 
