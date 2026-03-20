@@ -138,22 +138,6 @@ Deep dive into the Cotizador assistant.
 5. Comparison to previous period: is performance improving?
 ```
 
-## Block Kit Output
-
-Reports produce structured JSON with these block types:
-
-| Block | Use For |
-|-------|---------|
-| `heading` (1/2/3) | Section titles |
-| `text` | Paragraphs, descriptions |
-| `fact_cards` | Key metrics with change % and sentiment coloring |
-| `table` | Detailed breakdowns |
-| `list` (ordered/unordered) | Bullet points, recommendations, steps |
-| `callout` (info/warning/success/error) | Important observations, alerts |
-| `divider` | Visual separation |
-
-For full Block Kit schema, see [references/block-kit-schema.md](references/block-kit-schema.md).
-
 ## API Reference
 
 Full endpoint documentation: [references/api-reference.md](references/api-reference.md)
