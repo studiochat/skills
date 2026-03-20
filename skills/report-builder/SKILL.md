@@ -54,20 +54,37 @@ python3 scripts/reports.py runs <report_id>
 python3 scripts/reports.py run-status <run_id>
 ```
 
+## Important: Do Not Run Unless Asked
+
+**Creating a report does NOT mean running it.** By default, only create the report definition. Do NOT trigger a run unless the user explicitly asks to execute or run it.
+
+- "Create a weekly report" → create the definition only
+- "Create and run a report" → create + trigger run
+- "Generate a report right now" → create + trigger run
+- "Set up a report for me" → create the definition only
+
 ## Workflows
 
-### One-Off Report
+### Create a Report Definition
 
-When the user asks for a single report ("generate a report of last week's conversations"), create it and run it immediately:
+Default workflow — create the definition without executing:
 
 1. **Discover** — List playbooks to identify which assistants to include
-2. **Create** — Create a manual report definition with the right instructions and time window
-3. **Run** — Immediately trigger a manual run
-4. **Monitor** — Poll `run-status` until completed (check every 15–20 seconds)
-5. **Deliver** — Share the result: the report is viewable in the Reports UI
+2. **Design** — Craft instructions based on what the user wants to analyze
+3. **Create** — Create the report definition
+4. **Confirm** — Tell the user the report was created and how to run it (from the UI or by asking)
+
+### One-Off Report (only when user asks to run)
+
+Only when the user explicitly asks to generate/run/execute a report now:
+
+1. **Create** — Create a manual report definition
+2. **Run** — Trigger a manual run
+3. **Monitor** — Poll `run-status` until completed (check every 15–20 seconds)
+4. **Deliver** — Share the result: the report is viewable in the Reports UI
 
 ```bash
-# One-off: create + run in sequence
+# Create + run (only when explicitly requested)
 python3 scripts/reports.py create --name "Ad-hoc: Last 7 days" \
   --instructions "..." --window 7 --playbooks BASE_ID
 # Note the report ID from output, then:
@@ -76,8 +93,6 @@ python3 scripts/reports.py run REPORT_ID --window 7
 python3 scripts/reports.py run-status RUN_ID
 ```
 
-If the user also wants the PDF on Slack, add `--slack "#channel"` to the create command.
-
 ### Recurring Report
 
 When the user wants a scheduled report:
@@ -85,8 +100,7 @@ When the user wants a scheduled report:
 1. **Discover** — List playbooks
 2. **Design** — Craft instructions based on what the user wants
 3. **Create** — Create with `--schedule cron --cron "EXPRESSION"` and optionally `--slack "#channel"`
-4. **Test** — Trigger a manual run to validate before the first scheduled execution
-5. **Iterate** — Update instructions if the test output needs adjustments
+4. **Confirm** — Tell the user the report is scheduled. Do NOT trigger a test run unless asked.
 
 ## Report Configuration
 
