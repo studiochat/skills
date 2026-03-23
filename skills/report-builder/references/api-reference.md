@@ -18,7 +18,8 @@ Body:
   "cron_expression": null,
   "playbook_base_ids": ["uuid1", "uuid2"],
   "time_window_days": 7,
-  "slack_channel": "#reports"
+  "slack_channel": "#reports",
+  "email_recipients": ["user@company.com"]
 }
 ```
 Returns: `201` with report definition.

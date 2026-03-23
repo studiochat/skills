@@ -115,6 +115,8 @@ def cmd_create(args):
         body["time_window_days"] = args.window
     if args.slack:
         body["slack_channel"] = args.slack
+    if args.email:
+        body["email_recipients"] = [e.strip() for e in args.email.split(",")]
 
     result = _request("POST", f"/projects/{PROJECT_ID}/reports", body=body)
     print(f"Created report: {result['id']}")
@@ -139,6 +141,10 @@ def cmd_update(report_id, args):
         body["slack_channel"] = args.slack
     if args.remove_slack:
         body["slack_channel"] = None
+    if args.email:
+        body["email_recipients"] = [e.strip() for e in args.email.split(",")]
+    if args.remove_email:
+        body["email_recipients"] = None
 
     if not body:
         print("Nothing to update.", file=sys.stderr)
@@ -224,6 +230,7 @@ def main():
     p_create.add_argument("--playbooks", help="Comma-separated playbook base_ids")
     p_create.add_argument("--window", type=int, help="Time window in days")
     p_create.add_argument("--slack", help="Slack channel for PDF delivery (e.g. #reports)")
+    p_create.add_argument("--email", help="Comma-separated email recipients for PDF delivery")
 
     p_update = sub.add_parser("update", help="Update a report")
     p_update.add_argument("report_id")
@@ -235,6 +242,8 @@ def main():
     p_update.add_argument("--window", type=int)
     p_update.add_argument("--slack", help="Slack channel (e.g. #reports)")
     p_update.add_argument("--remove-slack", action="store_true", help="Remove Slack delivery")
+    p_update.add_argument("--email", help="Comma-separated email recipients")
+    p_update.add_argument("--remove-email", action="store_true", help="Remove email delivery")
 
     p_delete = sub.add_parser("delete", help="Delete a report (requires approval)")
     p_delete.add_argument("report_id")

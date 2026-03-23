@@ -36,10 +36,10 @@ python3 scripts/reports.py create --name "Weekly CX Report" \
   --instructions "Analyze conversations..." \
   --playbooks PLAYBOOK_BASE_ID_1,PLAYBOOK_BASE_ID_2 \
   --schedule manual --window 7 \
-  --slack "#reports"
+  --slack "#reports" --email "user@company.com,boss@company.com"
 
 # Update a report
-python3 scripts/reports.py update <report_id> --name "New Name" --slack "#new-channel"
+python3 scripts/reports.py update <report_id> --name "New Name" --slack "#new-channel" --email "new@company.com"
 
 # Delete a report
 python3 scripts/reports.py delete <report_id>
@@ -115,6 +115,7 @@ When the user wants a scheduled report:
 | `playbook_base_ids` | No | Filter to specific assistants. Empty = all |
 | `time_window_days` | No | Lookback window for manual reports (default: 7) |
 | `slack_channel` | No | Slack channel for PDF delivery. E.g. `#reports` |
+| `email_recipients` | No | List of email addresses for PDF delivery. E.g. `["a@b.com"]` |
 
 ### Schedule Presets
 
