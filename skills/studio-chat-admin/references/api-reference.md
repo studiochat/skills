@@ -356,3 +356,58 @@ Returns: `{project_id, settings: {personality_tone, user_enrichment_url}}`
 Returns: `{item_id, item_type, title, url}`
 
 Item types: `snippet`, `faq`, `notion`, `intercom`, `gdrive`.
+
+---
+
+## KB Item Correction Notes
+
+Correction notes are annotations attached to individual KB items. They override the original content at query time — no retraining needed. Notes take effect immediately.
+
+### List all items with notes in a KB
+
+`GET /knowledgebases/{kb_id}/notes`
+
+Returns: `{knowledgebase_id, items_with_notes: [{item_id, title, notes: [{text, created_at}]}], total}`
+
+### Get notes for a specific item
+
+`GET /knowledgebases/{kb_id}/items/{item_id}/notes`
+
+Returns: `{item_id, title, notes: [{text, created_at}]}`
+
+### Add a note to an item
+
+`POST /knowledgebases/{kb_id}/items/{item_id}/notes`
+
+```json
+{"note": "The correct minimum order is $7500, not $5000."}
+```
+
+### Remove a note from an item
+
+`DELETE /knowledgebases/{kb_id}/items/{item_id}/notes`
+
+```json
+{"note": "The correct minimum order is $7500, not $5000."}
+```
+
+### Replace all notes on an item (batch)
+
+`PATCH /knowledgebases/{kb_id}/items/{item_id}/notes`
+
+```json
+{"action": "set", "notes": ["First correction", "Second correction"]}
+```
+
+To clear all notes: `{"action": "set", "notes": []}`.
+
+### Supported KB types
+
+All item types support notes: FAQ (`faq_items[].id`), Snippets (`snippet_items[].id`), Notion (`notion_items[].id`), Intercom (`intercom_items[].id`), GDrive (`gdrive_items[].id`).
+
+### How notes work
+
+- Notes are injected into RAG search results at query time (not indexed)
+- No retraining required — changes are immediate
+- KB status is NOT changed when adding/removing notes
+- Notes override the original content for the LLM
