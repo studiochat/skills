@@ -405,6 +405,66 @@ Returns: `{item_id, title, notes: [{text, created_at}]}`
 {"old_note": "old text to find", "new_note": "replacement text"}
 ```
 
+---
+
+## Skills
+
+Skills are sub-instructions loaded on-demand for context window management. They are versioned with the playbook.
+
+### List skills for a playbook
+
+`GET /projects/{project_id}/playbooks/{base_id}/skills`
+
+Returns all skills for the latest version of the playbook, ordered by display order.
+
+### Create a skill
+
+`POST /projects/{project_id}/playbooks/{base_id}/skills`
+
+Creates a new playbook version with the skill added.
+
+```json
+{
+  "name": "refund-process",
+  "description": "Handle refund requests for orders",
+  "trigger": "Handle refund requests for orders",
+  "content": "## Refund Process\n1. Ask for order number\n2. Verify return window",
+  "is_active": true,
+  "order": 0
+}
+```
+
+### Update a skill
+
+`PATCH /projects/{project_id}/playbooks/{base_id}/skills/{skill_name}`
+
+Creates a new playbook version with the skill modified. All fields optional.
+
+```json
+{
+  "description": "Updated description",
+  "content": "Updated instructions..."
+}
+```
+
+### Delete a skill
+
+`DELETE /projects/{project_id}/playbooks/{base_id}/skills/{skill_name}`
+
+Creates a new playbook version without the skill.
+
+### Reorder skills
+
+`PUT /projects/{project_id}/playbooks/{base_id}/skills/reorder`
+
+Creates a new playbook version with updated order. Body is an ordered array of skill names.
+
+```json
+["password-reset", "refund-process", "billing-inquiry"]
+```
+
+---
+
 ### Supported KB types
 
 All item types support notes: FAQ (`faq_items[].id`), Snippets (`snippet_items[].id`), Notion (`notion_items[].id`), Intercom (`intercom_items[].id`), GDrive (`gdrive_items[].id`).

@@ -251,6 +251,79 @@ python3 scripts/api.py \
 
 ---
 
+## Skills
+
+Skills are sub-instructions loaded on-demand during conversations. Only skill metadata (name + description) goes in the system prompt; the full content is loaded via a `load_skill` tool call when the conversation matches the skill's description. This keeps the base context window small.
+
+Skills are versioned with the playbook — adding, editing, or deleting a skill creates a new playbook version.
+
+### List skills
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills"
+```
+
+### Create skill
+
+Creates a new playbook version with the skill added.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills" \
+  -X POST --body '{
+    "name": "refund-process",
+    "description": "Handle refund requests for orders",
+    "trigger": "Handle refund requests for orders",
+    "content": "## Refund Process\n\n1. Ask for order number\n2. Search in {{ kb(KB_ID) }} for the order\n3. Process refund within 48 hours\n4. Use {{ tool(TOOL_ID) }} to issue the refund",
+    "is_active": true,
+    "order": 0
+  }'
+```
+
+### Update skill
+
+Creates a new playbook version with the skill modified. All fields are optional.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/refund-process" \
+  -X PATCH --body '{"description": "Updated description", "content": "Updated instructions..."}'
+```
+
+### Delete skill
+
+Creates a new playbook version without the skill.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/refund-process" \
+  -X DELETE
+```
+
+### Reorder skills
+
+Creates a new playbook version with updated display order. Body is an ordered array of skill names.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/reorder" \
+  -X PUT --body '["password-reset", "refund-process", "billing-inquiry"]'
+```
+
+### Skill content supports templates
+
+Skill instructions support the same template macros as playbook instructions:
+- `{{ kb(KB_ID) }}` — Reference a knowledge base for search
+- `{{ tool(TOOL_ID) }}` — Reference an API tool
+- `{{ integration(SLUG) }}` — Reference a Composio/custom integration
+- `{{ composio_tool: TOOL_NAME | Display Name }}` — Reference a specific integration tool
+- `{{ custom_tool: short_name }}` — Reference a configured custom tool
+
+The referenced tools/KBs are registered in the agent even before the skill is loaded, ensuring they're available when needed.
+
+---
+
 ## API Tools
 
 Custom HTTP integrations the assistant can call during conversations.
@@ -295,5 +368,6 @@ Personality tones: `professional`, `friendly`, `casual`, `expert`, `playful`.
 - **KB status flow**: ADDED -> (train) -> ACTIVE. After edits: ACTIVE -> EDITED -> (train) -> ACTIVE.
 - **Always train after KB changes**: Creating, updating, or deleting KBs requires retraining.
 - **Playbook versioning**: Every update creates a new version. Use `active` endpoint to control which version is live.
-- **base_id vs playbook_id**: Active version endpoints use `base_id` (stable across versions). Other endpoints use `playbook_id` (specific version).
+- **Skills versioning**: Skill changes (add/edit/delete) also create new playbook versions. Use the dedicated skill endpoints for individual operations.
+- **base_id vs playbook_id**: Active version endpoints use `base_id` (stable across versions). Other endpoints use `playbook_id` (specific version). Skill endpoints use `base_id`.
 - **Soft deletes**: Delete operations are soft — use restore to undo.
