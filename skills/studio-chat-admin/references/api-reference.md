@@ -363,6 +363,12 @@ Item types: `snippet`, `faq`, `notion`, `intercom`, `gdrive`.
 
 Correction notes are annotations attached to individual KB items. They override the original content at query time — no retraining needed. Notes take effect immediately.
 
+### List all notes in a project
+
+`GET /projects/{project_id}/notes`
+
+Returns: `{project_id, items_with_notes: [{knowledgebase_id, knowledgebase_title, item_id, item_title, notes: [{text, created_at}]}], total}`
+
 ### List all items with notes in a KB
 
 `GET /knowledgebases/{kb_id}/notes`

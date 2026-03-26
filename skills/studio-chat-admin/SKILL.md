@@ -112,7 +112,13 @@ python3 scripts/api.py "/knowledgebases/KB_ID/restore" -X POST
 
 Add correction notes to individual KB items to override their content at query time. Notes take effect immediately — no retraining required.
 
-**List all items with notes** in a KB:
+**List all notes in the project:**
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/notes"
+```
+
+**List all items with notes** in a specific KB:
 
 ```bash
 python3 scripts/api.py "/knowledgebases/KB_ID/notes"
