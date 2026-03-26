@@ -142,13 +142,13 @@ python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes" -X POST --bod
 python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes" -X DELETE --body '{"note": "The correct answer is X, not Y."}'
 ```
 
-**Clear all notes** from an item:
+**Edit a note** on an item:
 
 ```bash
-python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes" -X PATCH --body '{"action": "set", "notes": []}'
+python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes" -X PUT --body '{"old_note": "old text", "new_note": "corrected text"}'
 ```
 
-Notes override the original content for the LLM. Use them to correct outdated information without editing the source.
+Notes override the original content for the LLM. Use them to correct outdated information without editing the source. To clear all notes, remove them one by one.
 
 ---
 

@@ -397,15 +397,13 @@ Returns: `{item_id, title, notes: [{text, created_at}]}`
 {"note": "The correct minimum order is $7500, not $5000."}
 ```
 
-### Replace all notes on an item (batch)
+### Edit a note on an item
 
-`PATCH /knowledgebases/{kb_id}/items/{item_id}/notes`
+`PUT /knowledgebases/{kb_id}/items/{item_id}/notes`
 
 ```json
-{"action": "set", "notes": ["First correction", "Second correction"]}
+{"old_note": "old text to find", "new_note": "replacement text"}
 ```
-
-To clear all notes: `{"action": "set", "notes": []}`.
 
 ### Supported KB types
 
