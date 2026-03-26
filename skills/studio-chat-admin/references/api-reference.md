@@ -463,26 +463,6 @@ Creates a new playbook version with updated order. Body is an ordered array of s
 ["password-reset", "refund-process", "billing-inquiry"]
 ```
 
-### Skills via playbook update
-
-Skills can also be set as part of a playbook update. The `skills` array in `PATCH /playbooks/{id}` replaces ALL skills on the new version:
-
-```json
-{
-  "content": "Updated instructions...",
-  "skills": [
-    {
-      "name": "refund-process",
-      "description": "Handle refund requests",
-      "trigger": "Handle refund requests",
-      "content": "Skill instructions...",
-      "is_active": true,
-      "order": 0
-    }
-  ]
-}
-```
-
 ---
 
 ### Supported KB types
