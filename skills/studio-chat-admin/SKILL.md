@@ -108,6 +108,48 @@ python3 scripts/api.py "/knowledgebases/KB_ID/restore" -X POST
 
 **After KB changes, train the project to apply them.**
 
+### Correction Notes
+
+Add correction notes to individual KB items to override their content at query time. Notes take effect immediately — no retraining required.
+
+**List all notes in the project:**
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/notes"
+```
+
+**List all items with notes** in a specific KB:
+
+```bash
+python3 scripts/api.py "/knowledgebases/KB_ID/notes"
+```
+
+**Get notes for a specific item:**
+
+```bash
+python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes"
+```
+
+**Add a note** to an item:
+
+```bash
+python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes" -X POST --body '{"note": "The correct answer is X, not Y."}'
+```
+
+**Remove a note** from an item:
+
+```bash
+python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes" -X DELETE --body '{"note": "The correct answer is X, not Y."}'
+```
+
+**Edit a note** on an item:
+
+```bash
+python3 scripts/api.py "/knowledgebases/KB_ID/items/ITEM_ID/notes" -X PUT --body '{"old_note": "old text", "new_note": "corrected text"}'
+```
+
+Notes override the original content for the LLM. Use them to correct outdated information without editing the source. To clear all notes, remove them one by one.
+
 ---
 
 ## Playbooks
