@@ -32,15 +32,19 @@ python3 scripts/fetch.py <path> [--params key=value ...] [-o file.json]
 python3 scripts/fetch.py <path> --method POST [--body '{}'] [-o file.json]
 ```
 
-### export_conversations.py — Batch export with enrichment
+### export_conversations.py — Batch export with all metadata
 
 ```bash
 python3 scripts/export_conversations.py \
-  --start YYYY-MM-DD --end YYYY-MM-DD [filters] [--enrich metrics|messages|all] \
+  --start YYYY-MM-DD --end YYYY-MM-DD [filters] [--messages] \
   [--sentiment negative,neutral,positive] [--resources irrelevant,partial,relevant] \
   [--min-messages N] [--max-messages N] [--sort-by field] [--sort-order asc|desc] \
   [--format json|csv] -o output.json
 ```
+
+Every conversation includes all metadata inline: summary, sentiment (label + reason),
+resources (label + reason), skills, tags, handoff status, message count, latency, model.
+Use `--messages` to also fetch full message history (one API call per conversation).
 
 ## Workflow
 
@@ -67,8 +71,8 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /projects/{pid}/conversations` | Paginated list with filters (playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting) |
-| `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning (slim: summary, sentiment, resources, tags, message_count) |
+| `GET /projects/{pid}/conversations` | Paginated list with all metadata inline: summary, sentiment (label+reason), resources (label+reason), skills, tags, handoff, message_count, latency, model. Filters: playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting |
+| `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning: summary, sentiment, resources, tags, has_handoff, message_count, skills |
 | `GET /projects/{pid}/conversations/{cid}/messages` | Full message history + citations |
 | `GET /projects/{pid}/conversations/{cid}/metrics` | Sentiment, resource quality, summary for one conversation |
 | `POST /projects/{pid}/conversations/{cid}/metrics/analyze` | Trigger scoring for an unscored conversation |
@@ -90,6 +94,8 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 | `GET /projects/{pid}/analytics/api-tools/sparklines` | Lightweight per-tool daily counts for sparklines (trailing N days) |
 | `GET /projects/{pid}/analytics/toolkits` | Toolkit usage: totals, success/fail, by-action breakdown, param breakdown, time series, recent calls |
 | `GET /projects/{pid}/analytics/toolkit-calls/sparklines` | Lightweight per-toolkit daily counts for sparklines (trailing N days) |
+| `GET /projects/{pid}/analytics/skills` | Skill usage: totals, success/fail, time series, recent loads. Filters: skill_name, date range, search |
+| `GET /projects/{pid}/analytics/skills/sparklines` | Lightweight per-skill daily counts for sparklines (trailing N days) |
 
 ### Configuration Context
 
@@ -191,24 +197,24 @@ python3 scripts/fetch.py \
   -o negative_summaries.json
 ```
 
-### 4. Batch Export (all conversations + enrichment)
+### 4. Batch Export (all conversations with metadata)
 
 ```bash
-# Export all conversations as JSON
+# Export all conversations — summary, sentiment, resources, skills, tags come inline
 python3 scripts/export_conversations.py \
   --start 2025-01-01 --end 2025-02-01 -o all_conversations.json
 
-# Export with sentiment scores and summaries
+# Export with full message history (slower — one call per conversation)
 python3 scripts/export_conversations.py \
-  --start 2025-01-01 --end 2025-02-01 --enrich metrics -o convos_with_metrics.json
-
-# Export EVERYTHING (metrics + messages)
-python3 scripts/export_conversations.py \
-  --start 2025-01-01 --end 2025-02-01 --enrich all -o full_export.json
+  --start 2025-01-01 --end 2025-02-01 --messages -o full_export.json
 
 # Export only negative sentiment as CSV
 python3 scripts/export_conversations.py \
   --start 2025-01-01 --end 2025-02-01 --sentiment negative --format csv -o negative.csv
+
+# Export handoff conversations only
+python3 scripts/export_conversations.py \
+  --start 2025-01-01 --end 2025-02-01 --handoff true -o handoffs.json
 ```
 
 ### 5. Single Conversation Deep Dive
@@ -301,6 +307,33 @@ python3 scripts/fetch.py \
   -o toolkit_errors.json
 ```
 
+### 8. Skill Analytics
+
+```bash
+# Skill usage overview (all skills)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills" \
+  --params start_date=2025-01-01 end_date=2025-02-01 \
+  -o skill_usage.json
+
+# Skill usage for a specific skill
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills" \
+  --params skill_name=refund-process start_date=2025-01-01 end_date=2025-02-01 \
+  -o skill_detail.json
+
+# Skill sparklines (lightweight, trailing 14 days by default)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills/sparklines" \
+  -o skill_sparklines.json
+
+# Search recent skill loads by keyword
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills" \
+  --params search=error limit=20 \
+  -o skill_errors.json
+```
+
 ---
 
 ## Analysis Recipes
@@ -386,7 +419,27 @@ for item in data.get("recent", []):
         print(f"  [{item['created_at']}] {item['action_name']}: {item.get('error_message', 'unknown')}")
 ```
 
-### Sparkline Overview (All Tools at a Glance)
+### Skill Usage Analysis
+
+```python
+import json
+
+with open("skill_usage.json") as f:
+    data = json.load(f)
+
+print(f"Total skill loads: {data['total_calls']}")
+print(f"Success: {data['successful_calls']} | Failed: {data['failed_calls']}")
+
+success_rate = (data['successful_calls'] / data['total_calls'] * 100) if data['total_calls'] else 0
+print(f"Success rate: {success_rate:.1f}%")
+
+print("\nRecent loads:")
+for item in data.get("recent", []):
+    status = "ok" if item['success'] else f"FAIL: {item.get('error_message', 'unknown')}"
+    print(f"  [{item['created_at']}] {item['skill_name']}: {status}")
+```
+
+### Sparkline Overview (All Resources at a Glance)
 
 ```python
 import json
@@ -406,6 +459,51 @@ print("\nToolkit activity (last 14 days):")
 for slug, item in sorted(sparklines.items(), key=lambda x: x[1]['total'], reverse=True):
     trend = " ".join(str(pt['count']) for pt in item['series'][-7:])
     print(f"  {slug}: {item['total']} total | last 7d: [{trend}]")
+
+with open("skill_sparklines.json") as f:
+    sparklines = json.load(f)
+
+print("\nSkill activity (last 14 days):")
+for name, item in sorted(sparklines.items(), key=lambda x: x[1]['total'], reverse=True):
+    trend = " ".join(str(pt['count']) for pt in item['series'][-7:])
+    print(f"  {name}: {item['total']} total | last 7d: [{trend}]")
+```
+
+### Conversation Metadata Analysis (inline fields)
+
+```python
+import json
+
+# All metadata comes inline — no separate enrichment calls needed
+with open("all_conversations.json") as f:
+    data = json.load(f)
+
+convs = data["conversations"]
+print(f"Total: {len(convs)} conversations\n")
+
+# Sentiment breakdown (from inline sentiment_label)
+sentiments = {}
+for c in convs:
+    label = c.get("sentiment_label") or "unscored"
+    sentiments[label] = sentiments.get(label, 0) + 1
+print("Sentiment:")
+for label, count in sorted(sentiments.items()):
+    print(f"  {label}: {count}")
+
+# Skills usage (from inline skills field)
+skill_counts = {}
+for c in convs:
+    for skill in c.get("skills") or []:
+        skill_counts[skill] = skill_counts.get(skill, 0) + 1
+print("\nSkills loaded:")
+for skill, count in sorted(skill_counts.items(), key=lambda x: -x[1]):
+    print(f"  {skill}: {count} conversations")
+
+# Handoff conversations with negative sentiment
+bad_handoffs = [c for c in convs if c.get("has_handoff") and c.get("sentiment_label") == "negative"]
+print(f"\nNegative handoffs: {len(bad_handoffs)}")
+for c in bad_handoffs[:5]:
+    print(f"  [{c['conversation_id']}] {c.get('summary', 'no summary')[:80]}")
 ```
 
 ---

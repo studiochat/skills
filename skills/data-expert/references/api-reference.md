@@ -28,6 +28,7 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [API Tools](#api-tools)
 - [Resource Analytics — API Tool Usage](#resource-analytics--api-tool-usage)
 - [Resource Analytics — Toolkit Usage](#resource-analytics--toolkit-usage)
+- [Resource Analytics — Skill Usage](#resource-analytics--skill-usage)
 - [Custom Toolkits Reference](#custom-toolkits-reference)
 - [Analyst Conversations](#analyst-conversations)
 
@@ -164,6 +165,8 @@ Paginated list of customer conversations with comprehensive filtering.
 
 **Response fields per conversation:**
 
+All metadata is returned inline — no separate enrichment calls needed.
+
 ```
 conversation_id             string  Unique conversation identifier
 inbox_name                  string  Channel name (e.g., "Website Chat")
@@ -175,13 +178,18 @@ last_message_at             string  ISO 8601 timestamp of last message
 first_user_message          string  Text of the customer's first message
 last_assistant_message      string  Text of the AI's last response
 has_handoff                 bool    Whether conversation was escalated to human
-has_winback                 bool    Whether a winback message was sent
-tags                        array   List of tag strings
+has_error                   bool    Whether conversation had an error (timeout, agent_error)
+tags                        array   List of tag strings (merged from internal + external tags)
+skills                      array   Skill names loaded during the conversation (null if none)
 avg_response_latency_ms     int     Average AI response time for this conversation
 sentiment_label             string  "negative", "neutral", or "positive" (null if unscored)
+sentiment_reason            string  Explanation of sentiment scoring (null if unscored)
 resources_label             string  "irrelevant", "partial", or "relevant" (null if unscored)
+resources_reason            string  Explanation of resource relevance scoring (null if unscored)
 summary                     string  AI-generated conversation summary (null if unscored)
 model                       string  LLM model used (e.g., "gpt-4o-mini")
+winback_sent_at             string  ISO 8601 timestamp when winback was sent (null if not sent)
+context                     object  Context dict passed to the agent (contact info, etc.)
 ```
 
 **Pagination:** Response includes `total`, `limit`, `offset`. Use `offset += limit` to page.
@@ -222,6 +230,7 @@ tags                        array   List of tag strings
 has_handoff                 bool    Whether escalated to human
 message_count               int     Total messages
 last_message_at             string  ISO 8601 timestamp of last message
+skills                      array   Skill names loaded during the conversation (null if none)
 ```
 
 **Pagination:** Response includes `total`, `limit`, `offset`.
@@ -781,6 +790,68 @@ Lightweight batch endpoint returning per-toolkit daily counts for sparkline char
   series                array   Daily data points
     date                string  YYYY-MM-DD
     count               int     Calls that day
+```
+
+---
+
+## Resource Analytics — Skill Usage
+
+`GET /projects/{pid}/analytics/skills`
+
+Skill load events: totals, success/failure, time series, and recent items.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `skill_name` | string | | Filter by specific skill name |
+| `start_date` | string | | YYYY-MM-DD format |
+| `end_date` | string | | YYYY-MM-DD format |
+| `search` | string | | Search in skill_name, conversation_id, error_message |
+| `limit` | int | 50 | Max recent items (1-500) |
+| `offset` | int | 0 | Skip N recent items |
+
+**Response fields:**
+
+```
+total_calls                 int     Total skill loads
+successful_calls            int     Successful loads
+failed_calls                int     Failed loads
+time_series                 array   Daily buckets
+  date                      string  YYYY-MM-DD
+  count                     int     Loads that day
+  success_count             int     Successful loads that day
+recent                      array   Most recent skill loads
+  id                        string  Log entry ID
+  skill_name                string  Name of the skill
+  success                   bool    Whether the load succeeded
+  error_message             string  Error message if failed (null otherwise)
+  created_at                string  ISO 8601 timestamp
+  conversation_id           string  Conversation that triggered the load (null if N/A)
+```
+
+---
+
+### Skill Sparklines
+
+`GET /projects/{pid}/analytics/skills/sparklines`
+
+Lightweight per-skill daily counts for sparkline charts.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `days` | int | 14 | Trailing window (1-90 days) |
+
+**Response:** Dictionary keyed by skill name.
+
+```
+{skill_name}:
+  total                     int     Total loads in window
+  series                    array   Daily data points
+    date                    string  YYYY-MM-DD
+    count                   int     Loads that day
 ```
 
 ---
