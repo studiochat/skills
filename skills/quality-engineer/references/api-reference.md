@@ -243,6 +243,7 @@ by reusing the same `conversation_id`.
 | `user_message` | string | Yes | The user's message |
 | `context` | object | No | User context dict (email, plan, etc.) |
 | `tags` | array | No | Tags to associate with the conversation |
+| `include_citations` | bool | No | Return KB citation details in response (default: false) |
 
 **Response:**
 
@@ -252,7 +253,16 @@ events                  array   Messages, labels, handoffs, notes
   event_type            string  "message", "label", "handoff_agent", etc.
   data                  object  Event-specific payload
 tool_calls              array   Tool calls made during execution
-citations               array   KB citations (if include_citations=true)
+  name                  string  Tool name (e.g., "search_knowledge_base", "load_skill")
+  arguments             string  JSON string of tool arguments
+  result                string  Tool execution result
+  tool_type             string  "kb_search", "custom", "list_agents", "list_teams", "list_kbs"
+citations               array   KB citations (only if include_citations=true)
+  citation_id           string  Reference ID (used as [[id]] in message text)
+  kb_id                 string  Knowledge base ID
+  item_id               string  Item ID within the KB
+  content               string  Retrieved snippet content
+  file_name             string  Source file name (if applicable)
 elapsed_time_ms         int     Response time in milliseconds
 first_seen              bool    True if this is the first message in the conversation
 ```

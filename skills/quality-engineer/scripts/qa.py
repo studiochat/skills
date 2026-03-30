@@ -16,7 +16,7 @@ Usage:
     qa.py runs status RUN_ID
     qa.py runs results RUN_ID [-o file.json]
     qa.py runs cancel RUN_ID
-    qa.py chat PLAYBOOK_BASE_ID --message "text" [--conversation-id ID] [--context '{}']
+    qa.py chat PLAYBOOK_BASE_ID --message "text" [--conversation-id ID] [--context '{}'] [--verbose]
 """
 
 import json
@@ -154,7 +154,7 @@ def cmd_runs_cancel(run_id):
 # === Chat ===
 
 
-def cmd_chat(base_id, message, conversation_id=None, context=None):
+def cmd_chat(base_id, message, conversation_id=None, context=None, verbose=False):
     if not conversation_id:
         import uuid
 
@@ -163,27 +163,112 @@ def cmd_chat(base_id, message, conversation_id=None, context=None):
     body = {
         "conversation_id": conversation_id,
         "user_message": message,
+        "include_citations": True,
     }
     if context:
         body["context"] = context
 
     data = _request("POST", f"/playbooks/{base_id}/active/chat", body=body)
 
-    # Extract assistant messages from events
-    print(f"conversation_id: {conversation_id}", file=sys.stderr)
+    # -- Header --
+    elapsed = data.get("elapsed_time_ms")
+    elapsed_str = f" ({elapsed}ms)" if elapsed else ""
+    print(f"conversation_id: {conversation_id}{elapsed_str}", file=sys.stderr)
+
+    # -- Events --
     events = data.get("events", [])
     for event in events:
-        if event.get("event_type") == "message":
-            content = event.get("data", {}).get("content", "")
+        etype = event.get("event_type", "")
+        edata = event.get("data", {})
+        if etype == "message":
+            content = edata.get("content", "")
             if content:
                 print(f"\nAssistant: {content}")
+        elif etype == "label":
+            print(f"  [label] {edata.get('label', '?')}", file=sys.stderr)
+        elif etype == "note":
+            print(f"  [note] {edata.get('content', '')[:120]}", file=sys.stderr)
+        elif etype in ("handoff_agent", "handoff_team"):
+            target = edata.get("agent_id") or edata.get("team_id") or "?"
+            reason = edata.get("reason", "")
+            print(f"  [{etype}] → {target}  reason: {reason}", file=sys.stderr)
+        elif etype == "priority":
+            print(f"  [priority] {edata.get('priority', '?')}", file=sys.stderr)
 
-    # Show tool calls if any
+    # -- Tool calls --
     tool_calls = data.get("tool_calls", [])
     if tool_calls:
-        print(f"\n[{len(tool_calls)} tool call(s)]", file=sys.stderr)
+        print(f"\n--- Tool calls ({len(tool_calls)}) ---", file=sys.stderr)
         for tc in tool_calls:
-            print(f"  {tc.get('name', '?')}({tc.get('arguments', '{}')})", file=sys.stderr)
+            name = tc.get("name", "?")
+            ttype = tc.get("tool_type", "")
+            args_raw = tc.get("arguments", "{}")
+            result_raw = tc.get("result", "")
+
+            # Parse arguments for readable display
+            try:
+                args_obj = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+            except (json.JSONDecodeError, TypeError):
+                args_obj = args_raw
+
+            type_tag = f" [{ttype}]" if ttype else ""
+            print(f"  {name}{type_tag}", file=sys.stderr)
+
+            # Show key arguments
+            if isinstance(args_obj, dict):
+                for k, v in args_obj.items():
+                    val = str(v)[:200]
+                    print(f"    {k}: {val}", file=sys.stderr)
+
+            # Show result summary
+            if verbose and result_raw:
+                result_str = str(result_raw)
+                if len(result_str) > 500:
+                    result_str = result_str[:500] + "…"
+                print(f"    → {result_str}", file=sys.stderr)
+            elif result_raw and name == "search_knowledge_base":
+                # Always show KB search result summary
+                try:
+                    result_obj = json.loads(result_raw) if isinstance(result_raw, str) else result_raw
+                    if isinstance(result_obj, dict):
+                        results = result_obj.get("results", [])
+                        print(f"    → {len(results)} result(s)", file=sys.stderr)
+                        for r in results[:5]:
+                            score = r.get("relevance_score", "")
+                            title = r.get("item_title", "")
+                            kb_type = r.get("kb_type", "")
+                            snippet = (r.get("content", ""))[:100].replace("\n", " ")
+                            score_str = f" ({score:.2f})" if isinstance(score, (int, float)) else ""
+                            print(f"      [{kb_type}] {title}{score_str}: {snippet}", file=sys.stderr)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif result_raw and name == "load_skill":
+                result_str = str(result_raw)
+                print(f"    → loaded ({len(result_str)} chars)", file=sys.stderr)
+
+    # -- Citations --
+    citations = data.get("citations") or []
+    if citations:
+        print(f"\n--- Citations ({len(citations)}) ---", file=sys.stderr)
+        for c in citations:
+            cid = c.get("citation_id", "?")
+            kb_id = c.get("kb_id", "?")
+            item_id = c.get("item_id", "")
+            fname = c.get("file_name", "")
+            snippet = (c.get("content", ""))[:120].replace("\n", " ")
+            source = fname or item_id or kb_id
+            print(f"  [{cid}] {source}: {snippet}", file=sys.stderr)
+
+    # -- Explanation --
+    explanation = data.get("explanation", "")
+    if explanation:
+        print(f"\n--- Explanation ---", file=sys.stderr)
+        print(f"  {explanation}", file=sys.stderr)
+
+    # -- Raw JSON output (verbose) --
+    if verbose:
+        print(f"\n--- Full response ---", file=sys.stderr)
+        _print_json(data)
 
 
 # === Main ===
@@ -263,7 +348,7 @@ def main():
 
     elif group == "chat":
         if len(args) < 2:
-            print("Usage: qa.py chat PLAYBOOK_BASE_ID --message 'text'", file=sys.stderr)
+            print("Usage: qa.py chat PLAYBOOK_BASE_ID --message 'text' [--verbose]", file=sys.stderr)
             sys.exit(1)
         base_id = args[1]
         message = get_flag("--message")
@@ -275,7 +360,8 @@ def main():
         context_raw = get_flag("--context")
         if context_raw:
             context = json.loads(context_raw)
-        cmd_chat(base_id, message, conversation_id, context)
+        verbose = "--verbose" in args or "-v" in args
+        cmd_chat(base_id, message, conversation_id, context, verbose=verbose)
 
     else:
         print(f"Unknown group: {group}. Use 'cases', 'runs', or 'chat'", file=sys.stderr)
