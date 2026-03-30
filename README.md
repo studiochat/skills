@@ -12,6 +12,12 @@ Analyze customer conversation data: deflection rates, sentiment distributions, r
 
 **Use when:** analyzing conversations, reviewing performance, examining trends, computing metrics, or generating reports.
 
+### [quality-engineer](./skills/quality-engineer/)
+
+Test and evaluate AI assistant behavior. Create test cases with assertions, run evaluations against playbook versions, analyze pass/fail results, and simulate conversations on demand.
+
+**Use when:** creating QA test suites, running evals, comparing playbook versions, verifying assistant behavior, or simulating conversations.
+
 ### [studio-chat-admin](./skills/studio-chat-admin/)
 
 Manage project configuration: knowledge bases, playbooks, training, office hours, and API tools. Full CRUD operations via the Studio Chat API.
