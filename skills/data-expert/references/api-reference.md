@@ -11,7 +11,9 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [Aggregate Metrics](#aggregate-metrics)
 - [List Conversations](#list-conversations)
 - [Conversation Summaries](#conversation-summaries)
-- [Conversation Messages](#conversation-messages)
+- [Conversation Detail](#conversation-detail)
+- [Conversation Batch](#conversation-batch)
+- [Conversation Messages (legacy)](#conversation-messages-legacy)
 - [Conversation Metrics](#conversation-metrics)
 - [Trigger Metrics Scoring](#trigger-metrics-scoring)
 - [Trending Topics](#trending-topics)
@@ -237,11 +239,81 @@ skills                      array   Skill names loaded during the conversation (
 
 ---
 
-## Conversation Messages
+## Conversation Detail
+
+`GET /projects/{pid}/conversations/{conversation_id}`
+
+Full detail for a single conversation: all metadata + complete message history with per-message
+token usage/cost + tool calls + KB citations. One API call, everything included.
+
+**Response fields:**
+
+All fields from the conversation list endpoint (see above), plus:
+
+```
+messages                    array   Complete message history
+  role                      string  "user" or "assistant"
+  content                   string  Message text content
+  created_at                string  ISO 8601 timestamp
+  metadata                  object  Labels, priority, notes, handoff, explanation, latency
+  tool_calls                array   Tool calls in this message
+    id                      string  Tool call ID
+    name                    string  Tool name (e.g., "search_knowledge_base")
+    arguments               string  JSON arguments string
+    result                  string  Tool result (null if unavailable)
+    tool_type               string  "kb_search", "list_agents", "list_teams", "list_kbs", or "custom"
+    enhanced_params         object  Parsed parameters for display
+  is_winback                bool    Whether this is a winback follow-up message
+  attachments               array   Attachments (images, documents)
+  input_tokens              int     Input tokens consumed (assistant messages, null otherwise)
+  output_tokens             int     Output tokens generated (assistant messages)
+  cache_read_tokens         int     Cache read tokens
+  cache_write_tokens        int     Cache write tokens
+  cost_usd                  float   Cost in USD for this message
+  llm_requests              int     Number of LLM API calls
+  tool_call_count           int     Number of tool calls
+  model                     string  LLM model used (e.g., "gpt-4o-mini")
+citations                   array   KB sources referenced across the conversation
+  citation_id               string  Unique citation ID
+  kb_id                     string  Knowledge base ID
+  item_id                   string  KB item ID (null if unavailable)
+  content                   string  Citation content excerpt
+  file_name                 string  Source file name (null if N/A)
+```
+
+---
+
+## Conversation Batch
+
+`POST /projects/{pid}/conversations/batch`
+
+Full detail for multiple conversations in a single request. Metadata is fetched in one query;
+messages are fetched per conversation.
+
+**Request body:**
+
+```json
+{
+  "conversation_ids": ["conv-1", "conv-2", "conv-3"]
+}
+```
+
+Maximum 50 conversation IDs per request. Non-existent IDs are silently skipped.
+
+**Response:**
+
+```
+conversations               array   List of ConversationDetail objects (same structure as above)
+```
+
+---
+
+## Conversation Messages (legacy)
 
 `GET /projects/{pid}/conversations/{conversation_id}/messages`
 
-Full message history for a single conversation.
+Message history + citations for a single conversation. Does NOT include conversation metadata
+or per-message token usage. **Prefer the detail endpoint above** for new integrations.
 
 **Response fields:**
 
@@ -251,9 +323,9 @@ messages                    array   Ordered list of messages
   content                   string  Message text content
   created_at                string  ISO 8601 timestamp
 citations                   array   KB sources referenced
-  id                        string  Citation ID
-  source                    string  KB name
-  title                     string  Source document title
+  citation_id               string  Citation ID
+  kb_id                     string  Knowledge base ID
+  content                   string  Citation content
 ```
 
 ---

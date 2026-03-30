@@ -73,7 +73,9 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 |----------|---------|
 | `GET /projects/{pid}/conversations` | Paginated list with all metadata inline: summary, sentiment (label+reason), resources (label+reason), skills, tags, handoff, message_count, latency, model. Filters: playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting |
 | `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning: summary, sentiment, resources, tags, has_handoff, message_count, skills |
-| `GET /projects/{pid}/conversations/{cid}/messages` | Full message history + citations |
+| `GET /projects/{pid}/conversations/{cid}` | **Full detail**: all metadata + complete message history with per-message token usage/cost + tool calls + citations |
+| `POST /projects/{pid}/conversations/batch` | **Batch detail**: same as above for up to 50 conversations in a single request. Body: `{"conversation_ids": [...]}` |
+| `GET /projects/{pid}/conversations/{cid}/messages` | Message history + citations (without metadata — prefer the detail endpoint above) |
 | `GET /projects/{pid}/conversations/{cid}/metrics` | Sentiment, resource quality, summary for one conversation |
 | `POST /projects/{pid}/conversations/{cid}/metrics/analyze` | Trigger scoring for an unscored conversation |
 
@@ -196,6 +198,27 @@ python3 scripts/fetch.py \
   --params sentiment=negative limit=50 \
   -o negative_summaries.json
 ```
+
+### 3b. Conversation Deep Dive (single or batch)
+
+```bash
+# Full detail for a single conversation — metadata + messages + token usage + citations
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/CONVERSATION_ID" \
+  -o conversation_detail.json
+
+# Batch detail for multiple conversations (up to 50) — single API call
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/batch" \
+  -X POST --body '{"conversation_ids": ["conv-1", "conv-2", "conv-3"]}' \
+  -o batch_detail.json
+```
+
+Each conversation in the detail response includes:
+- All metadata (same as the list endpoint)
+- Complete message history with per-message token usage (input_tokens, output_tokens, cost_usd, model)
+- All tool calls with arguments and results
+- KB citations extracted from search tool calls
 
 ### 4. Batch Export (all conversations with metadata)
 

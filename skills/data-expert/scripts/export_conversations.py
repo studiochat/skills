@@ -103,42 +103,76 @@ def fetch_conversations(base_url, token, project_id, filters, batch_size=100):
     return all_convs, total
 
 
-def fetch_messages(base_url, token, project_id, conversations):
-    """Fetch full message history for each conversation (N API calls)."""
+def _api_post(base_url, token, path, body):
+    """Make an authenticated POST request and return parsed JSON."""
+    url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+
+    headers = {"Content-Type": "application/json"}
+    if token.startswith(("sbs_", "kps_")):
+        headers["X-API-Key"] = token
+    else:
+        headers["Authorization"] = f"Bearer {token}"
+
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, headers=headers, method="POST", data=data)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_messages(base_url, token, project_id, conversations, batch_size=50):
+    """Fetch full message history using the batch endpoint.
+
+    Uses POST /conversations/batch to fetch messages in batches of up to 50,
+    instead of making one API call per conversation.
+    """
     total = len(conversations)
     fetched = 0
     failed = 0
 
-    for i, conv in enumerate(conversations):
-        cid = conv.get("conversation_id")
-        if not cid:
+    # Process in batches of batch_size
+    for start in range(0, total, batch_size):
+        batch = conversations[start : start + batch_size]
+        cids = [c.get("conversation_id") for c in batch if c.get("conversation_id")]
+
+        if not cids:
             continue
 
         try:
-            msg_data = _api_request(
+            result = _api_post(
                 base_url,
                 token,
-                f"/projects/{project_id}/conversations/{cid}/messages",
+                f"/projects/{project_id}/conversations/batch",
+                {"conversation_ids": cids},
             )
-            conv["messages"] = msg_data.get("messages", [])
-            conv["citations"] = msg_data.get("citations", [])
-            fetched += 1
-        except urllib.error.HTTPError as e:
-            conv["messages"] = []
-            conv["citations"] = []
-            if e.code != 404:
-                failed += 1
-        except Exception:
-            conv["messages"] = []
-            conv["citations"] = []
-            failed += 1
+            # Build lookup by conversation_id
+            detail_map = {}
+            for detail in result.get("conversations", []):
+                detail_map[detail.get("conversation_id")] = detail
 
-        if (i + 1) % 25 == 0 or (i + 1) == total:
-            print(
-                f"  Fetched messages: {i + 1}/{total} ({failed} errors)",
-                file=sys.stderr,
-            )
-        time.sleep(0.05)
+            # Merge messages and citations into existing conversation dicts
+            for conv in batch:
+                cid = conv.get("conversation_id")
+                detail = detail_map.get(cid)
+                if detail:
+                    conv["messages"] = detail.get("messages", [])
+                    conv["citations"] = detail.get("citations", [])
+                    fetched += 1
+                else:
+                    conv["messages"] = []
+                    conv["citations"] = []
+
+        except Exception as e:
+            # Fallback: mark batch as failed
+            for conv in batch:
+                conv["messages"] = []
+                conv["citations"] = []
+            failed += len(batch)
+            print(f"  Batch failed: {e}", file=sys.stderr)
+
+        print(
+            f"  Fetched messages: {min(start + batch_size, total)}/{total} ({failed} errors)",
+            file=sys.stderr,
+        )
 
     return fetched, failed
 
