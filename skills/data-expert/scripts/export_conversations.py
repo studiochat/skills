@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Batch export conversations with optional enrichment.
+"""Batch export conversations with all metadata.
 
-Paginates through all conversations matching the given filters,
-optionally enriches each with metrics (sentiment, summary) and/or
-full message history, and writes results to JSON or CSV.
+Paginates through all conversations matching the given filters.
+All metadata (summary, sentiment, resources, skills, tags, etc.) is
+included by default in every conversation — no enrichment needed.
+
+Optionally fetches full message history with --messages (one API call
+per conversation).
 
 Usage:
     export_conversations.py [options] -o output.json
@@ -13,27 +16,23 @@ Examples:
     # Export all conversations from January 2025
     export_conversations.py --start 2025-01-01 --end 2025-02-01 -o jan.json
 
-    # Export with sentiment and summaries
+    # Export handoff conversations
     export_conversations.py --start 2025-01-01 --end 2025-02-01 \
-        --enrich metrics -o jan_with_metrics.json
+        --handoff true -o handoffs.json
 
-    # Export only handoff conversations with full messages
+    # Export handoff conversations with full message history
     export_conversations.py --start 2025-01-01 --end 2025-02-01 \
-        --handoff true --enrich messages -o handoffs.json
+        --handoff true --messages -o handoffs_full.json
 
-    # Export everything: metrics + messages, as CSV
+    # Export only negative sentiment as CSV
     export_conversations.py --start 2025-01-01 --end 2025-02-01 \
-        --enrich all --format csv -o full_export.csv
+        --sentiment negative --format csv -o negative.csv
 
     # Filter by playbook and tags
     export_conversations.py --start 2025-01-01 --end 2025-02-01 \
         --playbook-base-id abc-123 --tags billing,refund -o billing.json
 
-    # Export only negative sentiment conversations (server-side filter)
-    export_conversations.py --start 2025-01-01 --end 2025-02-01 \
-        --sentiment negative -o negative.json
-
-    # Export short conversations sorted by message count
+    # Short conversations sorted by message count
     export_conversations.py --start 2025-01-01 --end 2025-02-01 \
         --max-messages 3 --sort-by message_count --sort-order asc -o short.json
 """
@@ -57,7 +56,7 @@ def _api_request(base_url, token, path, params=None):
         url = f"{url}?{urlencode(params)}"
 
     headers = {"Content-Type": "application/json"}
-    if token.startswith("sbs_"):
+    if token.startswith(("sbs_", "kps_")):
         headers["X-API-Key"] = token
     else:
         headers["Authorization"] = f"Bearer {token}"
@@ -68,7 +67,12 @@ def _api_request(base_url, token, path, params=None):
 
 
 def fetch_conversations(base_url, token, project_id, filters, batch_size=100):
-    """Paginate through all conversations matching filters."""
+    """Paginate through all conversations matching filters.
+
+    The API returns all metadata inline per conversation:
+    summary, sentiment_label, sentiment_reason, resources_label,
+    resources_reason, skills, tags, has_handoff, message_count, etc.
+    """
     all_convs = []
     offset = 0
     total = None
@@ -99,110 +103,78 @@ def fetch_conversations(base_url, token, project_id, filters, batch_size=100):
     return all_convs, total
 
 
-def enrich_with_metrics(base_url, token, project_id, conversations):
-    """Add sentiment, resources, and summary to each conversation."""
+def _api_post(base_url, token, path, body):
+    """Make an authenticated POST request and return parsed JSON."""
+    url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+
+    headers = {"Content-Type": "application/json"}
+    if token.startswith(("sbs_", "kps_")):
+        headers["X-API-Key"] = token
+    else:
+        headers["Authorization"] = f"Bearer {token}"
+
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, headers=headers, method="POST", data=data)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_messages(base_url, token, project_id, conversations, batch_size=50):
+    """Fetch full message history using the batch endpoint.
+
+    Uses POST /conversations/batch to fetch messages in batches of up to 50,
+    instead of making one API call per conversation.
+    """
     total = len(conversations)
-    enriched = 0
+    fetched = 0
     failed = 0
 
-    for i, conv in enumerate(conversations):
-        cid = conv.get("conversation_id")
-        if not cid:
+    # Process in batches of batch_size
+    for start in range(0, total, batch_size):
+        batch = conversations[start : start + batch_size]
+        cids = [c.get("conversation_id") for c in batch if c.get("conversation_id")]
+
+        if not cids:
             continue
 
         try:
-            metrics = _api_request(
+            result = _api_post(
                 base_url,
                 token,
-                f"/projects/{project_id}/conversations/{cid}/metrics",
+                f"/projects/{project_id}/conversations/batch",
+                {"conversation_ids": cids},
             )
-            conv["metrics"] = metrics
-            enriched += 1
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                conv["metrics"] = None
-            else:
-                conv["metrics"] = {"error": f"HTTP {e.code}"}
-                failed += 1
+            # Build lookup by conversation_id
+            detail_map = {}
+            for detail in result.get("conversations", []):
+                detail_map[detail.get("conversation_id")] = detail
+
+            # Merge messages and citations into existing conversation dicts
+            for conv in batch:
+                cid = conv.get("conversation_id")
+                detail = detail_map.get(cid)
+                if detail:
+                    conv["messages"] = detail.get("messages", [])
+                    conv["citations"] = detail.get("citations", [])
+                    fetched += 1
+                else:
+                    conv["messages"] = []
+                    conv["citations"] = []
+
         except Exception as e:
-            conv["metrics"] = {"error": str(e)[:200]}
-            failed += 1
+            # Fallback: mark batch as failed
+            for conv in batch:
+                conv["messages"] = []
+                conv["citations"] = []
+            failed += len(batch)
+            print(f"  Batch failed: {e}", file=sys.stderr)
 
-        if (i + 1) % 25 == 0 or (i + 1) == total:
-            print(
-                f"  Enriched metrics: {i + 1}/{total} ({failed} errors)",
-                file=sys.stderr,
-            )
-        time.sleep(0.05)  # Be gentle on the API
+        print(
+            f"  Fetched messages: {min(start + batch_size, total)}/{total} ({failed} errors)",
+            file=sys.stderr,
+        )
 
-    return enriched, failed
-
-
-def enrich_with_messages(base_url, token, project_id, conversations):
-    """Add full message history to each conversation."""
-    total = len(conversations)
-    enriched = 0
-    failed = 0
-
-    for i, conv in enumerate(conversations):
-        cid = conv.get("conversation_id")
-        if not cid:
-            continue
-
-        try:
-            msg_data = _api_request(
-                base_url,
-                token,
-                f"/projects/{project_id}/conversations/{cid}/messages",
-            )
-            conv["messages_full"] = msg_data.get("messages", [])
-            conv["citations"] = msg_data.get("citations", [])
-            enriched += 1
-        except urllib.error.HTTPError as e:
-            conv["messages_full"] = []
-            conv["citations"] = []
-            if e.code != 404:
-                failed += 1
-        except Exception:
-            conv["messages_full"] = []
-            conv["citations"] = []
-            failed += 1
-
-        if (i + 1) % 25 == 0 or (i + 1) == total:
-            print(
-                f"  Enriched messages: {i + 1}/{total} ({failed} errors)",
-                file=sys.stderr,
-            )
-        time.sleep(0.05)
-
-    return enriched, failed
-
-
-def filter_by_sentiment(conversations, sentiment_filter):
-    """Post-filter conversations by sentiment label (requires metrics enrichment)."""
-    labels = [s.strip().lower() for s in sentiment_filter.split(",")]
-    filtered = []
-    for conv in conversations:
-        # Check top-level sentiment_label or enriched metrics
-        label = conv.get("sentiment_label", "")
-        if not label and conv.get("metrics"):
-            label = conv["metrics"].get("sentiment_label", "")
-        if label and label.lower() in labels:
-            filtered.append(conv)
-    return filtered
-
-
-def filter_by_resources(conversations, resources_filter):
-    """Post-filter conversations by resource quality label (requires metrics enrichment)."""
-    labels = [r.strip().lower() for r in resources_filter.split(",")]
-    filtered = []
-    for conv in conversations:
-        label = conv.get("resources_label", "")
-        if not label and conv.get("metrics"):
-            label = conv["metrics"].get("resources_label", "")
-        if label and label.lower() in labels:
-            filtered.append(conv)
-    return filtered
+    return fetched, failed
 
 
 def write_json(conversations, output_path, total):
@@ -226,8 +198,7 @@ def write_csv(conversations, output_path):
             f.write("")
         return 0
 
-    # Determine columns from first conversation + common metrics fields
-    base_cols = [
+    cols = [
         "conversation_id",
         "inbox_name",
         "playbook_name",
@@ -238,45 +209,33 @@ def write_csv(conversations, output_path):
         "first_user_message",
         "last_assistant_message",
         "has_handoff",
-        "has_winback",
+        "has_error",
         "tags",
+        "skills",
         "avg_response_latency_ms",
         "sentiment_label",
+        "sentiment_reason",
         "resources_label",
+        "resources_reason",
+        "summary",
         "model",
     ]
-    metrics_cols = [
-        "metrics_sentiment_label",
-        "metrics_sentiment_reason",
-        "metrics_resources_label",
-        "metrics_resources_reason",
-        "metrics_summary",
-    ]
-    all_cols = base_cols + metrics_cols
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=all_cols, extrasaction="ignore")
+    writer = csv.DictWriter(output, fieldnames=cols, extrasaction="ignore")
     writer.writeheader()
 
     for conv in conversations:
         row = {}
-        for col in base_cols:
+        for col in cols:
             val = conv.get(col, "")
             if isinstance(val, list):
                 val = ", ".join(str(v) for v in val)
             elif isinstance(val, bool):
                 val = str(val).lower()
+            elif val is None:
+                val = ""
             row[col] = val
-
-        # Flatten metrics
-        metrics = conv.get("metrics") or {}
-        if isinstance(metrics, dict):
-            row["metrics_sentiment_label"] = metrics.get("sentiment_label", "")
-            row["metrics_sentiment_reason"] = metrics.get("sentiment_reason", "")
-            row["metrics_resources_label"] = metrics.get("resources_label", "")
-            row["metrics_resources_reason"] = metrics.get("resources_reason", "")
-            row["metrics_summary"] = metrics.get("summary", "")
-
         writer.writerow(row)
 
     content = output.getvalue()
@@ -287,7 +246,7 @@ def write_csv(conversations, output_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Export conversations with optional enrichment",
+        description="Export conversations with all metadata",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -304,18 +263,9 @@ def main():
     parser.add_argument("--handoff", choices=["true", "false"], help="Filter by handoff status")
     parser.add_argument("--winback", choices=["true", "false"], help="Filter by winback status")
     parser.add_argument("--search", help="Search by conversation ID")
-
-    # Server-side filters (applied at API level, no enrichment needed)
-    parser.add_argument(
-        "--sentiment",
-        help="Filter by sentiment: negative,neutral,positive (comma-separated). "
-        "Applied server-side when possible, falls back to post-filter with --enrich metrics",
-    )
-    parser.add_argument(
-        "--resources",
-        help="Filter by resource quality: irrelevant,partial,relevant (comma-separated). "
-        "Applied server-side when possible, falls back to post-filter with --enrich metrics",
-    )
+    parser.add_argument("--sentiment", help="Filter by sentiment: negative,neutral,positive")
+    parser.add_argument("--resources", help="Filter by resource quality: irrelevant,partial,relevant")
+    parser.add_argument("--skill-name", help="Filter by skill name (conversations that loaded this skill)")
     parser.add_argument("--min-messages", type=int, help="Minimum message count")
     parser.add_argument("--max-messages", type=int, help="Maximum message count")
     parser.add_argument(
@@ -325,12 +275,11 @@ def main():
     )
     parser.add_argument("--sort-order", choices=["asc", "desc"], help="Sort direction (default: desc)")
 
-    # Enrichment
+    # Messages (the only optional extra — requires per-conversation API calls)
     parser.add_argument(
-        "--enrich",
-        choices=["none", "metrics", "messages", "all"],
-        default="none",
-        help="Enrich each conversation with additional data (default: none)",
+        "--messages",
+        action="store_true",
+        help="Include full message history (slower — one API call per conversation)",
     )
 
     # Output
@@ -372,12 +321,12 @@ def main():
         filters["has_winback"] = args.winback
     if args.search:
         filters["search"] = args.search
-
-    # Server-side filters (preferred over post-filtering)
     if args.sentiment:
         filters["sentiment"] = args.sentiment
     if args.resources:
         filters["resources"] = args.resources
+    if args.skill_name:
+        filters["skill_name"] = args.skill_name
     if args.min_messages:
         filters["min_messages"] = str(args.min_messages)
     if args.max_messages:
@@ -389,36 +338,16 @@ def main():
 
     print(f"Exporting conversations ({start} to {end})...", file=sys.stderr)
 
-    # Fetch
+    # Fetch — all metadata comes inline (single efficient query per page)
     conversations, total = fetch_conversations(
-        base_url,
-        token,
-        project_id,
-        filters,
-        args.batch_size,
+        base_url, token, project_id, filters, args.batch_size
     )
     print(f"Fetched {len(conversations)} conversations (total: {total})", file=sys.stderr)
 
-    # Enrich
-    if args.enrich in ("metrics", "all"):
-        print("Enriching with metrics (sentiment, summary)...", file=sys.stderr)
-        enrich_with_metrics(base_url, token, project_id, conversations)
-
-    if args.enrich in ("messages", "all"):
-        print("Enriching with full message history...", file=sys.stderr)
-        enrich_with_messages(base_url, token, project_id, conversations)
-
-    # Post-filters (fallback for enriched data — server-side filtering is preferred
-    # and already applied above via query params, but enriched metrics may refine further)
-    if args.sentiment and args.enrich in ("metrics", "all"):
-        before = len(conversations)
-        conversations = filter_by_sentiment(conversations, args.sentiment)
-        print(f"Sentiment post-filter: {before} → {len(conversations)}", file=sys.stderr)
-
-    if args.resources and args.enrich in ("metrics", "all"):
-        before = len(conversations)
-        conversations = filter_by_resources(conversations, args.resources)
-        print(f"Resources post-filter: {before} → {len(conversations)}", file=sys.stderr)
+    # Optionally fetch full message history (requires per-conversation calls)
+    if args.messages:
+        print("Fetching message history...", file=sys.stderr)
+        fetch_messages(base_url, token, project_id, conversations)
 
     # Write output
     if args.format == "csv":

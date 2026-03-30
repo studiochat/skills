@@ -12,6 +12,13 @@ description: >
 
 Fetch data from the Studio Chat API, process it with Python, and produce actionable analysis. All API calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
+## Key Terminology
+
+**Assistants and playbooks are the same concept.** In the API, the term "playbook" is used
+everywhere — but users refer to them as "assistants." When the user says "assistant," "bot,"
+or "agent," they mean a playbook. Use `playbook_base_id` to filter by assistant (all versions)
+or `playbook_id` for a specific version.
+
 ## Setup
 
 Set the following environment variables before using the scripts:
@@ -32,15 +39,19 @@ python3 scripts/fetch.py <path> [--params key=value ...] [-o file.json]
 python3 scripts/fetch.py <path> --method POST [--body '{}'] [-o file.json]
 ```
 
-### export_conversations.py — Batch export with enrichment
+### export_conversations.py — Batch export with all metadata
 
 ```bash
 python3 scripts/export_conversations.py \
-  --start YYYY-MM-DD --end YYYY-MM-DD [filters] [--enrich metrics|messages|all] \
+  --start YYYY-MM-DD --end YYYY-MM-DD [filters] [--messages] \
   [--sentiment negative,neutral,positive] [--resources irrelevant,partial,relevant] \
   [--min-messages N] [--max-messages N] [--sort-by field] [--sort-order asc|desc] \
   [--format json|csv] -o output.json
 ```
+
+Every conversation includes all metadata inline: summary, sentiment (label + reason),
+resources (label + reason), skills, tags, handoff status, message count, latency, model.
+Use `--messages` to also fetch full message history (one API call per conversation).
 
 ## Workflow
 
@@ -67,9 +78,11 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /projects/{pid}/conversations` | Paginated list with filters (playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting) |
-| `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning (slim: summary, sentiment, resources, tags, message_count) |
-| `GET /projects/{pid}/conversations/{cid}/messages` | Full message history + citations |
+| `GET /projects/{pid}/conversations` | Paginated list with all metadata inline: summary, sentiment (label+reason), resources (label+reason), skills, tags, handoff, message_count, latency, model. Filters: playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting |
+| `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning: summary, sentiment, resources, tags, has_handoff, message_count, skills |
+| `GET /projects/{pid}/conversations/{cid}` | **Full detail**: all metadata + complete message history with per-message token usage/cost + tool calls + citations |
+| `POST /projects/{pid}/conversations/batch` | **Batch detail**: same as above for up to 50 conversations in a single request. Body: `{"conversation_ids": [...]}` |
+| `GET /projects/{pid}/conversations/{cid}/messages` | Message history + citations (without metadata — prefer the detail endpoint above) |
 | `GET /projects/{pid}/conversations/{cid}/metrics` | Sentiment, resource quality, summary for one conversation |
 | `POST /projects/{pid}/conversations/{cid}/metrics/analyze` | Trigger scoring for an unscored conversation |
 
@@ -90,6 +103,8 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 | `GET /projects/{pid}/analytics/api-tools/sparklines` | Lightweight per-tool daily counts for sparklines (trailing N days) |
 | `GET /projects/{pid}/analytics/toolkits` | Toolkit usage: totals, success/fail, by-action breakdown, param breakdown, time series, recent calls |
 | `GET /projects/{pid}/analytics/toolkit-calls/sparklines` | Lightweight per-toolkit daily counts for sparklines (trailing N days) |
+| `GET /projects/{pid}/analytics/skills` | Skill usage: totals, success/fail, time series, recent loads. Filters: skill_name, date range, search |
+| `GET /projects/{pid}/analytics/skills/sparklines` | Lightweight per-skill daily counts for sparklines (trailing N days) |
 
 ### Configuration Context
 
@@ -191,24 +206,49 @@ python3 scripts/fetch.py \
   -o negative_summaries.json
 ```
 
-### 4. Batch Export (all conversations + enrichment)
+### 3b. Conversation Deep Dive (single or batch)
+
+**Note on conversation IDs:** The `conversation_id` is the **external platform ID** — the one
+assigned by the messaging platform (e.g., Chatwoot, Intercom). It is NOT an internal database
+primary key. This is the same ID visible in the platform UI and in webhook payloads.
 
 ```bash
-# Export all conversations as JSON
+# Full detail for a single conversation — metadata + messages + tool calls + citations
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/CONVERSATION_ID" \
+  -o conversation_detail.json
+
+# Batch detail for multiple conversations (up to 50) — single API call
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/batch" \
+  -X POST --body '{"conversation_ids": ["conv-1", "conv-2", "conv-3"]}' \
+  -o batch_detail.json
+```
+
+Each conversation in the detail response includes:
+- All metadata (same as the list endpoint)
+- Complete message history with all tool calls (name, arguments, results)
+- Message metadata (reasoning explanation, labels, handoff info, latency)
+- KB citations extracted from search tool calls
+
+### 4. Batch Export (all conversations with metadata)
+
+```bash
+# Export all conversations — summary, sentiment, resources, skills, tags come inline
 python3 scripts/export_conversations.py \
   --start 2025-01-01 --end 2025-02-01 -o all_conversations.json
 
-# Export with sentiment scores and summaries
+# Export with full message history (slower — one call per conversation)
 python3 scripts/export_conversations.py \
-  --start 2025-01-01 --end 2025-02-01 --enrich metrics -o convos_with_metrics.json
-
-# Export EVERYTHING (metrics + messages)
-python3 scripts/export_conversations.py \
-  --start 2025-01-01 --end 2025-02-01 --enrich all -o full_export.json
+  --start 2025-01-01 --end 2025-02-01 --messages -o full_export.json
 
 # Export only negative sentiment as CSV
 python3 scripts/export_conversations.py \
   --start 2025-01-01 --end 2025-02-01 --sentiment negative --format csv -o negative.csv
+
+# Export handoff conversations only
+python3 scripts/export_conversations.py \
+  --start 2025-01-01 --end 2025-02-01 --handoff true -o handoffs.json
 ```
 
 ### 5. Single Conversation Deep Dive
@@ -301,6 +341,33 @@ python3 scripts/fetch.py \
   -o toolkit_errors.json
 ```
 
+### 8. Skill Analytics
+
+```bash
+# Skill usage overview (all skills)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills" \
+  --params start_date=2025-01-01 end_date=2025-02-01 \
+  -o skill_usage.json
+
+# Skill usage for a specific skill
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills" \
+  --params skill_name=refund-process start_date=2025-01-01 end_date=2025-02-01 \
+  -o skill_detail.json
+
+# Skill sparklines (lightweight, trailing 14 days by default)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills/sparklines" \
+  -o skill_sparklines.json
+
+# Search recent skill loads by keyword
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/skills" \
+  --params search=error limit=20 \
+  -o skill_errors.json
+```
+
 ---
 
 ## Analysis Recipes
@@ -386,7 +453,27 @@ for item in data.get("recent", []):
         print(f"  [{item['created_at']}] {item['action_name']}: {item.get('error_message', 'unknown')}")
 ```
 
-### Sparkline Overview (All Tools at a Glance)
+### Skill Usage Analysis
+
+```python
+import json
+
+with open("skill_usage.json") as f:
+    data = json.load(f)
+
+print(f"Total skill loads: {data['total_calls']}")
+print(f"Success: {data['successful_calls']} | Failed: {data['failed_calls']}")
+
+success_rate = (data['successful_calls'] / data['total_calls'] * 100) if data['total_calls'] else 0
+print(f"Success rate: {success_rate:.1f}%")
+
+print("\nRecent loads:")
+for item in data.get("recent", []):
+    status = "ok" if item['success'] else f"FAIL: {item.get('error_message', 'unknown')}"
+    print(f"  [{item['created_at']}] {item['skill_name']}: {status}")
+```
+
+### Sparkline Overview (All Resources at a Glance)
 
 ```python
 import json
@@ -406,17 +493,101 @@ print("\nToolkit activity (last 14 days):")
 for slug, item in sorted(sparklines.items(), key=lambda x: x[1]['total'], reverse=True):
     trend = " ".join(str(pt['count']) for pt in item['series'][-7:])
     print(f"  {slug}: {item['total']} total | last 7d: [{trend}]")
+
+with open("skill_sparklines.json") as f:
+    sparklines = json.load(f)
+
+print("\nSkill activity (last 14 days):")
+for name, item in sorted(sparklines.items(), key=lambda x: x[1]['total'], reverse=True):
+    trend = " ".join(str(pt['count']) for pt in item['series'][-7:])
+    print(f"  {name}: {item['total']} total | last 7d: [{trend}]")
+```
+
+### Conversation Metadata Analysis (inline fields)
+
+```python
+import json
+
+# All metadata comes inline — no separate enrichment calls needed
+with open("all_conversations.json") as f:
+    data = json.load(f)
+
+convs = data["conversations"]
+print(f"Total: {len(convs)} conversations\n")
+
+# Sentiment breakdown (from inline sentiment_label)
+sentiments = {}
+for c in convs:
+    label = c.get("sentiment_label") or "unscored"
+    sentiments[label] = sentiments.get(label, 0) + 1
+print("Sentiment:")
+for label, count in sorted(sentiments.items()):
+    print(f"  {label}: {count}")
+
+# Skills usage (from inline skills field)
+skill_counts = {}
+for c in convs:
+    for skill in c.get("skills") or []:
+        skill_counts[skill] = skill_counts.get(skill, 0) + 1
+print("\nSkills loaded:")
+for skill, count in sorted(skill_counts.items(), key=lambda x: -x[1]):
+    print(f"  {skill}: {count} conversations")
+
+# Handoff conversations with negative sentiment
+bad_handoffs = [c for c in convs if c.get("has_handoff") and c.get("sentiment_label") == "negative"]
+print(f"\nNegative handoffs: {len(bad_handoffs)}")
+for c in bad_handoffs[:5]:
+    print(f"  [{c['conversation_id']}] {c.get('summary', 'no summary')[:80]}")
 ```
 
 ---
 
 ## Reference
 
-### Date Ranges
+### Query Dimensions
 
-Always scope queries with `start_date` and `end_date` in ISO 8601 format:
-- Full: `2025-01-01T00:00:00Z`
-- The `export_conversations.py` script accepts short form: `2025-01-01`
+Every conversation query supports these filter dimensions. All filters are server-side — no client-side post-filtering needed.
+
+| Dimension | Parameter | Type | Logic | Example |
+|-----------|-----------|------|-------|---------|
+| **Date range** | `start_date`, `end_date` | ISO 8601 string | Range on `last_message_at` | `start_date=2025-01-01T00:00:00Z` |
+| **Assistant / Playbook (version)** | `playbook_id` | UUID | Exact match on specific version | `playbook_id=abc-123` |
+| **Assistant / Playbook (all versions)** | `playbook_base_id` | UUID | All versions of an assistant | `playbook_base_id=def-456` |
+| **Inbox / Channel** | `inbox_id` | UUID | Exact match (Website, WhatsApp, etc.) | `inbox_id=inbox-789` |
+| **Handoff** | `has_handoff` | bool | `true` = escalated, `false` = AI-resolved | `has_handoff=true` |
+| **Winback** | `has_winback` | bool | `true` = winback sent, `false` = not sent | `has_winback=true` |
+| **Tags** | `tags` | comma-separated | **AND** logic — must have ALL tags | `tags=billing,refund` |
+| **Sentiment** | `sentiment` | comma-separated | **OR** logic — any of the values | `sentiment=negative,neutral` |
+| **Resources** | `resources` | comma-separated | **OR** logic — any of the values | `resources=irrelevant,partial` |
+| **Message count** | `min_messages`, `max_messages` | int | Range filter | `min_messages=5&max_messages=20` |
+| **Skill** | `skill_name` | string | Conversations that loaded this skill | `skill_name=refund-process` |
+| **Search** | `search` | string | Substring match on conversation ID | `search=12345` |
+| **Exact IDs** | `conversation_ids` | list (POST body) | Exact match on a list of IDs | Used by batch endpoint |
+
+### Sorting
+
+| Parameter | Values | Default |
+|-----------|--------|---------|
+| `sort_by` | `last_message_at`, `first_message_at`, `message_count` | `last_message_at` |
+| `sort_order` | `desc`, `asc` | `desc` |
+
+### Date Ranges & Timezones
+
+Always scope queries with `start_date` and `end_date` in ISO 8601 format.
+
+**Timezone handling:**
+- **UTC is the default.** If no timezone offset is provided, the timestamp is treated as UTC.
+- **Timezone-aware timestamps are supported.** You can pass any valid ISO 8601 offset.
+- The `export_conversations.py` script accepts short form dates and appends `T00:00:00Z` (UTC).
+
+| Format | Example | Timezone |
+|--------|---------|----------|
+| Full UTC | `2025-01-01T00:00:00Z` | UTC |
+| With offset | `2025-01-01T00:00:00-03:00` | ART (Argentina) |
+| With offset | `2025-01-01T00:00:00-05:00` | EST |
+| Short form (scripts) | `2025-01-01` | Converted to `2025-01-01T00:00:00Z` (UTC) |
+
+**Important:** Date filters apply to `last_message_at` (last activity in the conversation), not the creation time. This ensures the filter matches what's displayed in the UI.
 
 ### Metric Labels
 
@@ -431,12 +602,27 @@ Always scope queries with `start_date` and `end_date` in ISO 8601 format:
 
 Higher = better (more conversations resolved by AI without human escalation).
 
-### Filter Operators
+### Combining Dimensions
 
-- `tags` — AND logic: conversation must have ALL specified tags
-- `playbook_base_id` — Matches all versions of a playbook
-- `sentiment` — Comma-separated OR: `negative`, `neutral`, `positive`
-- `resources` — Comma-separated OR: `irrelevant`, `partial`, `relevant`
-- `min_messages` / `max_messages` — Integer range filter on message count
-- `sort_by` — `last_message_at` (default), `first_message_at`, `message_count`
-- `sort_order` — `desc` (default), `asc`
+All filters can be combined. Examples:
+
+```bash
+# Negative sentiment conversations that used the refund skill in January
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params start_date=2025-01-01T00:00:00Z end_date=2025-02-01T00:00:00Z \
+    sentiment=negative skill_name=refund-process limit=100 \
+  -o negative_refund.json
+
+# Handoff conversations with billing tag, sorted by message count
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params has_handoff=true tags=billing sort_by=message_count sort_order=desc \
+  -o billing_handoffs.json
+
+# Long conversations (10+ messages) with irrelevant resources
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params min_messages=10 resources=irrelevant limit=50 \
+  -o long_irrelevant.json
+```

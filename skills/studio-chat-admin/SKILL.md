@@ -10,6 +10,12 @@ description: >
 
 Read and write Studio Chat project configuration using the API. All calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
+## Key Terminology
+
+**Assistants and playbooks are the same concept.** In the API, the term "playbook" is used
+everywhere — but users refer to them as "assistants," "bots," or "agents." When the user
+mentions any of these, they mean a playbook.
+
 ## Setup
 
 Set the following environment variables before using the scripts:

@@ -11,7 +11,9 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [Aggregate Metrics](#aggregate-metrics)
 - [List Conversations](#list-conversations)
 - [Conversation Summaries](#conversation-summaries)
-- [Conversation Messages](#conversation-messages)
+- [Conversation Detail](#conversation-detail)
+- [Conversation Batch](#conversation-batch)
+- [Conversation Messages (legacy)](#conversation-messages-legacy)
 - [Conversation Metrics](#conversation-metrics)
 - [Trigger Metrics Scoring](#trigger-metrics-scoring)
 - [Trending Topics](#trending-topics)
@@ -28,6 +30,7 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [API Tools](#api-tools)
 - [Resource Analytics — API Tool Usage](#resource-analytics--api-tool-usage)
 - [Resource Analytics — Toolkit Usage](#resource-analytics--toolkit-usage)
+- [Resource Analytics — Skill Usage](#resource-analytics--skill-usage)
 - [Custom Toolkits Reference](#custom-toolkits-reference)
 - [Analyst Conversations](#analyst-conversations)
 
@@ -159,10 +162,13 @@ Paginated list of customer conversations with comprehensive filtering.
 | `resources` | string | | Comma-separated: `irrelevant`, `partial`, `relevant` (OR logic) |
 | `min_messages` | int | | Minimum message count |
 | `max_messages` | int | | Maximum message count |
+| `skill_name` | string | | Only conversations that loaded this skill (uses efficient EXISTS subquery) |
 | `sort_by` | string | `last_message_at` | `last_message_at`, `first_message_at`, or `message_count` |
 | `sort_order` | string | `desc` | `desc` or `asc` |
 
 **Response fields per conversation:**
+
+All metadata is returned inline — no separate enrichment calls needed.
 
 ```
 conversation_id             string  Unique conversation identifier
@@ -175,13 +181,18 @@ last_message_at             string  ISO 8601 timestamp of last message
 first_user_message          string  Text of the customer's first message
 last_assistant_message      string  Text of the AI's last response
 has_handoff                 bool    Whether conversation was escalated to human
-has_winback                 bool    Whether a winback message was sent
-tags                        array   List of tag strings
+has_error                   bool    Whether conversation had an error (timeout, agent_error)
+tags                        array   List of tag strings (merged from internal + external tags)
+skills                      array   Skill names loaded during the conversation (null if none)
 avg_response_latency_ms     int     Average AI response time for this conversation
 sentiment_label             string  "negative", "neutral", or "positive" (null if unscored)
+sentiment_reason            string  Explanation of sentiment scoring (null if unscored)
 resources_label             string  "irrelevant", "partial", or "relevant" (null if unscored)
+resources_reason            string  Explanation of resource relevance scoring (null if unscored)
 summary                     string  AI-generated conversation summary (null if unscored)
 model                       string  LLM model used (e.g., "gpt-4o-mini")
+winback_sent_at             string  ISO 8601 timestamp when winback was sent (null if not sent)
+context                     object  Context dict passed to the agent (contact info, etc.)
 ```
 
 **Pagination:** Response includes `total`, `limit`, `offset`. Use `offset += limit` to page.
@@ -222,17 +233,85 @@ tags                        array   List of tag strings
 has_handoff                 bool    Whether escalated to human
 message_count               int     Total messages
 last_message_at             string  ISO 8601 timestamp of last message
+skills                      array   Skill names loaded during the conversation (null if none)
 ```
 
 **Pagination:** Response includes `total`, `limit`, `offset`.
 
 ---
 
-## Conversation Messages
+## Conversation Detail
+
+`GET /projects/{pid}/conversations/{conversation_id}`
+
+Full detail for a single conversation: all metadata + complete message history with
+tool calls + KB citations. One API call, everything included.
+
+**Note:** `conversation_id` is the **external platform ID** (e.g., the Chatwoot or Intercom
+conversation ID visible in the platform UI), not an internal database key.
+
+**Response fields:**
+
+All fields from the conversation list endpoint (see above), plus:
+
+```
+messages                    array   Complete message history
+  role                      string  "user" or "assistant"
+  content                   string  Message text content
+  created_at                string  ISO 8601 timestamp
+  metadata                  object  Labels, priority, notes, handoff, explanation, latency
+  tool_calls                array   Tool calls in this message
+    id                      string  Tool call ID
+    name                    string  Tool name (e.g., "search_knowledge_base")
+    arguments               string  JSON arguments string
+    result                  string  Tool result (null if unavailable)
+    tool_type               string  "kb_search", "list_agents", "list_teams", "list_kbs", or "custom"
+    enhanced_params         object  Parsed parameters for display
+  is_winback                bool    Whether this is a winback follow-up message
+  attachments               array   Attachments (images, documents)
+citations                   array   KB sources referenced across the conversation
+  citation_id               string  Unique citation ID
+  kb_id                     string  Knowledge base ID
+  item_id                   string  KB item ID (null if unavailable)
+  content                   string  Citation content excerpt
+  file_name                 string  Source file name (null if N/A)
+```
+
+---
+
+## Conversation Batch
+
+`POST /projects/{pid}/conversations/batch`
+
+Full detail for multiple conversations in a single request. Metadata is fetched in one query;
+messages are fetched per conversation.
+
+**Note:** `conversation_ids` are **external platform IDs** (same as the detail endpoint above).
+
+**Request body:**
+
+```json
+{
+  "conversation_ids": ["conv-1", "conv-2", "conv-3"]
+}
+```
+
+Maximum 50 conversation IDs per request. Non-existent IDs are silently skipped.
+
+**Response:**
+
+```
+conversations               array   List of ConversationDetail objects (same structure as above)
+```
+
+---
+
+## Conversation Messages (legacy)
 
 `GET /projects/{pid}/conversations/{conversation_id}/messages`
 
-Full message history for a single conversation.
+Message history + citations for a single conversation. Does NOT include conversation metadata
+or per-message token usage. **Prefer the detail endpoint above** for new integrations.
 
 **Response fields:**
 
@@ -242,9 +321,9 @@ messages                    array   Ordered list of messages
   content                   string  Message text content
   created_at                string  ISO 8601 timestamp
 citations                   array   KB sources referenced
-  id                        string  Citation ID
-  source                    string  KB name
-  title                     string  Source document title
+  citation_id               string  Citation ID
+  kb_id                     string  Knowledge base ID
+  content                   string  Citation content
 ```
 
 ---
@@ -781,6 +860,68 @@ Lightweight batch endpoint returning per-toolkit daily counts for sparkline char
   series                array   Daily data points
     date                string  YYYY-MM-DD
     count               int     Calls that day
+```
+
+---
+
+## Resource Analytics — Skill Usage
+
+`GET /projects/{pid}/analytics/skills`
+
+Skill load events: totals, success/failure, time series, and recent items.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `skill_name` | string | | Filter by specific skill name |
+| `start_date` | string | | YYYY-MM-DD format |
+| `end_date` | string | | YYYY-MM-DD format |
+| `search` | string | | Search in skill_name, conversation_id, error_message |
+| `limit` | int | 50 | Max recent items (1-500) |
+| `offset` | int | 0 | Skip N recent items |
+
+**Response fields:**
+
+```
+total_calls                 int     Total skill loads
+successful_calls            int     Successful loads
+failed_calls                int     Failed loads
+time_series                 array   Daily buckets
+  date                      string  YYYY-MM-DD
+  count                     int     Loads that day
+  success_count             int     Successful loads that day
+recent                      array   Most recent skill loads
+  id                        string  Log entry ID
+  skill_name                string  Name of the skill
+  success                   bool    Whether the load succeeded
+  error_message             string  Error message if failed (null otherwise)
+  created_at                string  ISO 8601 timestamp
+  conversation_id           string  Conversation that triggered the load (null if N/A)
+```
+
+---
+
+### Skill Sparklines
+
+`GET /projects/{pid}/analytics/skills/sparklines`
+
+Lightweight per-skill daily counts for sparkline charts.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `days` | int | 14 | Trailing window (1-90 days) |
+
+**Response:** Dictionary keyed by skill name.
+
+```
+{skill_name}:
+  total                     int     Total loads in window
+  series                    array   Daily data points
+    date                    string  YYYY-MM-DD
+    count                   int     Loads that day
 ```
 
 ---
