@@ -201,8 +201,12 @@ python3 scripts/fetch.py \
 
 ### 3b. Conversation Deep Dive (single or batch)
 
+**Note on conversation IDs:** The `conversation_id` is the **external platform ID** — the one
+assigned by the messaging platform (e.g., Chatwoot, Intercom). It is NOT an internal database
+primary key. This is the same ID visible in the platform UI and in webhook payloads.
+
 ```bash
-# Full detail for a single conversation — metadata + messages + token usage + citations
+# Full detail for a single conversation — metadata + messages + tool calls + citations
 python3 scripts/fetch.py \
   "/projects/$STUDIO_PROJECT_ID/conversations/CONVERSATION_ID" \
   -o conversation_detail.json
@@ -216,8 +220,8 @@ python3 scripts/fetch.py \
 
 Each conversation in the detail response includes:
 - All metadata (same as the list endpoint)
-- Complete message history with per-message token usage (input_tokens, output_tokens, cost_usd, model)
-- All tool calls with arguments and results
+- Complete message history with all tool calls (name, arguments, results)
+- Message metadata (reasoning explanation, labels, handoff info, latency)
 - KB citations extracted from search tool calls
 
 ### 4. Batch Export (all conversations with metadata)

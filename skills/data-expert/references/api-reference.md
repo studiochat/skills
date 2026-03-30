@@ -244,8 +244,11 @@ skills                      array   Skill names loaded during the conversation (
 
 `GET /projects/{pid}/conversations/{conversation_id}`
 
-Full detail for a single conversation: all metadata + complete message history with per-message
-token usage/cost + tool calls + KB citations. One API call, everything included.
+Full detail for a single conversation: all metadata + complete message history with
+tool calls + KB citations. One API call, everything included.
+
+**Note:** `conversation_id` is the **external platform ID** (e.g., the Chatwoot or Intercom
+conversation ID visible in the platform UI), not an internal database key.
 
 **Response fields:**
 
@@ -266,14 +269,6 @@ messages                    array   Complete message history
     enhanced_params         object  Parsed parameters for display
   is_winback                bool    Whether this is a winback follow-up message
   attachments               array   Attachments (images, documents)
-  input_tokens              int     Input tokens consumed (assistant messages, null otherwise)
-  output_tokens             int     Output tokens generated (assistant messages)
-  cache_read_tokens         int     Cache read tokens
-  cache_write_tokens        int     Cache write tokens
-  cost_usd                  float   Cost in USD for this message
-  llm_requests              int     Number of LLM API calls
-  tool_call_count           int     Number of tool calls
-  model                     string  LLM model used (e.g., "gpt-4o-mini")
 citations                   array   KB sources referenced across the conversation
   citation_id               string  Unique citation ID
   kb_id                     string  Knowledge base ID
@@ -290,6 +285,8 @@ citations                   array   KB sources referenced across the conversatio
 
 Full detail for multiple conversations in a single request. Metadata is fetched in one query;
 messages are fetched per conversation.
+
+**Note:** `conversation_ids` are **external platform IDs** (same as the detail endpoint above).
 
 **Request body:**
 
