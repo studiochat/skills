@@ -105,6 +105,9 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 | `GET /projects/{pid}/analytics/toolkit-calls/sparklines` | Lightweight per-toolkit daily counts for sparklines (trailing N days) |
 | `GET /projects/{pid}/analytics/skills` | Skill usage: totals, success/fail, time series, recent loads. Filters: skill_name, date range, search |
 | `GET /projects/{pid}/analytics/skills/sparklines` | Lightweight per-skill daily counts for sparklines (trailing N days) |
+| `GET /projects/{pid}/analytics/kbs` | KB citation usage: total citations, by-source breakdown, time series, recent. Filters: kb_id, item_id, source, date range, search |
+| `GET /projects/{pid}/analytics/kbs/sparklines` | Lightweight per-KB daily citation counts for sparklines (trailing N days) |
+| `GET /projects/{pid}/analytics/kbs/{kb_id}/items` | Per-item citation traffic for a specific KB: item_id, count, sorted by most-cited. Use to find top FAQ/article/snippet items |
 
 ### Configuration Context
 
@@ -341,7 +344,46 @@ python3 scripts/fetch.py \
   -o toolkit_errors.json
 ```
 
-### 8. Skill Analytics
+### 8. KB Citation Analytics
+
+```bash
+# KB citation usage overview (all KBs)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/kbs" \
+  --params start_date=2025-01-01 end_date=2025-02-01 \
+  -o kb_citation_usage.json
+
+# Citation usage for a specific KB
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/kbs" \
+  --params kb_id=KB_UUID start_date=2025-01-01 end_date=2025-02-01 \
+  -o kb_detail.json
+
+# Citation usage for a specific item within a KB
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/kbs" \
+  --params kb_id=KB_UUID item_id=ITEM_UUID \
+  -o kb_item_detail.json
+
+# KB sparklines (lightweight, trailing 14 days by default)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/kbs/sparklines" \
+  -o kb_sparklines.json
+
+# Per-item citation traffic for a KB (top items by citation count)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/kbs/KB_UUID/items" \
+  --params limit=50 \
+  -o kb_item_traffic.json
+
+# Per-item traffic filtered by date range
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/kbs/KB_UUID/items" \
+  --params start_date=2025-01-01 end_date=2025-02-01 limit=10 \
+  -o kb_top_items.json
+```
+
+### 9. Skill Analytics
 
 ```bash
 # Skill usage overview (all skills)
@@ -471,6 +513,64 @@ print("\nRecent loads:")
 for item in data.get("recent", []):
     status = "ok" if item['success'] else f"FAIL: {item.get('error_message', 'unknown')}"
     print(f"  [{item['created_at']}] {item['skill_name']}: {status}")
+```
+
+### KB Citation & Top Items Analysis
+
+```python
+import json
+
+# Step 1: List all KBs to get names
+with open("kbs.json") as f:
+    kbs = json.load(f)
+kb_names = {kb["id"]: kb["title"] for kb in kbs}
+
+# Step 2: Get per-item traffic for a specific KB
+with open("kb_item_traffic.json") as f:
+    data = json.load(f)
+
+print(f"Top {data['total_items_cited']} cited items:")
+for item in data["items"]:
+    print(f"  {item['item_id']}: {item['count']} citations")
+
+# Step 3: Resolve item names by fetching item metadata
+# For each item_id, call GET /knowledgebases/{kb_id}/items/{item_id}
+# to get item_type, title, and url
+```
+
+**Common query: "Top 10 most cited Intercom articles"**
+
+```bash
+# 1. Find the Intercom KB id
+python3 scripts/fetch.py "/projects/$STUDIO_PROJECT_ID/knowledgebases" -o kbs.json
+# Look for kb_type=intercom in the output
+
+# 2. Get top items by citation count
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/analytics/kbs/INTERCOM_KB_ID/items" \
+  --params limit=10 \
+  -o top_intercom_items.json
+
+# 3. Resolve item titles
+python3 scripts/fetch.py "/knowledgebases/INTERCOM_KB_ID" -o intercom_kb.json
+```
+
+```python
+import json
+
+with open("top_intercom_items.json") as f:
+    traffic = json.load(f)
+
+with open("intercom_kb.json") as f:
+    kb = json.load(f)
+
+# Build item_id -> title lookup from intercom_items
+item_titles = {item["id"]: item["title"] for item in kb.get("intercom_items", [])}
+
+print("Top 10 most cited Intercom articles:")
+for i, entry in enumerate(traffic["items"][:10], 1):
+    title = item_titles.get(entry["item_id"], entry["item_id"])
+    print(f"  {i}. {title} — {entry['count']} citations")
 ```
 
 ### Sparkline Overview (All Resources at a Glance)
