@@ -256,7 +256,9 @@ python3 scripts/qa.py runs results RUN_ID -o eval_results.json
 
 ### Example: Simulate a Conversation
 
-Chat directly with a playbook without creating test cases. Useful for ad-hoc testing:
+Chat directly with a playbook without creating test cases. Useful for ad-hoc testing.
+The chat command shows the **full picture** of what the assistant did: skills loaded,
+KB articles searched, tool calls made, citations used, events emitted, and agent reasoning.
 
 ```bash
 # Start a new conversation
@@ -272,7 +274,29 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID \
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID \
   --message "Check my order status" \
   --context '{"email": "john@example.com", "order_id": "ORD-555"}'
+
+# Verbose mode — show full tool results and raw JSON response
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID \
+  --message "I want a refund" --verbose
 ```
+
+#### Chat Output Breakdown
+
+The chat command prints a structured breakdown to stderr:
+
+| Section | What it shows |
+|---------|---------------|
+| **Events** | Messages (stdout), labels, notes, handoffs, priority changes |
+| **Tool calls** | Every tool the assistant invoked, with arguments and result summaries |
+| **Citations** | KB articles referenced in the response, with source and snippet |
+| **Explanation** | Agent reasoning summary (why it chose a particular path) |
+
+**Tool call details** (always shown):
+- `load_skill [custom]` — which skill was loaded (or not loaded)
+- `search_knowledge_base [kb_search]` — query used, number of results, relevance scores, and content snippets
+- Custom API tools — name, arguments, and result preview
+
+**`--verbose` / `-v`** expands tool results to 500 chars and dumps the full JSON response.
 
 ### Example: Analyze Results
 
