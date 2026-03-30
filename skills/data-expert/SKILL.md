@@ -533,11 +533,50 @@ for c in bad_handoffs[:5]:
 
 ## Reference
 
-### Date Ranges
+### Query Dimensions
 
-Always scope queries with `start_date` and `end_date` in ISO 8601 format:
-- Full: `2025-01-01T00:00:00Z`
-- The `export_conversations.py` script accepts short form: `2025-01-01`
+Every conversation query supports these filter dimensions. All filters are server-side — no client-side post-filtering needed.
+
+| Dimension | Parameter | Type | Logic | Example |
+|-----------|-----------|------|-------|---------|
+| **Date range** | `start_date`, `end_date` | ISO 8601 string | Range on `last_message_at` | `start_date=2025-01-01T00:00:00Z` |
+| **Playbook (version)** | `playbook_id` | UUID | Exact match on specific version | `playbook_id=abc-123` |
+| **Playbook (all versions)** | `playbook_base_id` | UUID | All versions of an assistant | `playbook_base_id=def-456` |
+| **Inbox / Channel** | `inbox_id` | UUID | Exact match (Website, WhatsApp, etc.) | `inbox_id=inbox-789` |
+| **Handoff** | `has_handoff` | bool | `true` = escalated, `false` = AI-resolved | `has_handoff=true` |
+| **Winback** | `has_winback` | bool | `true` = winback sent, `false` = not sent | `has_winback=true` |
+| **Tags** | `tags` | comma-separated | **AND** logic — must have ALL tags | `tags=billing,refund` |
+| **Sentiment** | `sentiment` | comma-separated | **OR** logic — any of the values | `sentiment=negative,neutral` |
+| **Resources** | `resources` | comma-separated | **OR** logic — any of the values | `resources=irrelevant,partial` |
+| **Message count** | `min_messages`, `max_messages` | int | Range filter | `min_messages=5&max_messages=20` |
+| **Skill** | `skill_name` | string | Conversations that loaded this skill | `skill_name=refund-process` |
+| **Search** | `search` | string | Substring match on conversation ID | `search=12345` |
+| **Exact IDs** | `conversation_ids` | list (POST body) | Exact match on a list of IDs | Used by batch endpoint |
+
+### Sorting
+
+| Parameter | Values | Default |
+|-----------|--------|---------|
+| `sort_by` | `last_message_at`, `first_message_at`, `message_count` | `last_message_at` |
+| `sort_order` | `desc`, `asc` | `desc` |
+
+### Date Ranges & Timezones
+
+Always scope queries with `start_date` and `end_date` in ISO 8601 format.
+
+**Timezone handling:**
+- **UTC is the default.** If no timezone offset is provided, the timestamp is treated as UTC.
+- **Timezone-aware timestamps are supported.** You can pass any valid ISO 8601 offset.
+- The `export_conversations.py` script accepts short form dates and appends `T00:00:00Z` (UTC).
+
+| Format | Example | Timezone |
+|--------|---------|----------|
+| Full UTC | `2025-01-01T00:00:00Z` | UTC |
+| With offset | `2025-01-01T00:00:00-03:00` | ART (Argentina) |
+| With offset | `2025-01-01T00:00:00-05:00` | EST |
+| Short form (scripts) | `2025-01-01` | Converted to `2025-01-01T00:00:00Z` (UTC) |
+
+**Important:** Date filters apply to `last_message_at` (last activity in the conversation), not the creation time. This ensures the filter matches what's displayed in the UI.
 
 ### Metric Labels
 
@@ -552,12 +591,27 @@ Always scope queries with `start_date` and `end_date` in ISO 8601 format:
 
 Higher = better (more conversations resolved by AI without human escalation).
 
-### Filter Operators
+### Combining Dimensions
 
-- `tags` — AND logic: conversation must have ALL specified tags
-- `playbook_base_id` — Matches all versions of a playbook
-- `sentiment` — Comma-separated OR: `negative`, `neutral`, `positive`
-- `resources` — Comma-separated OR: `irrelevant`, `partial`, `relevant`
-- `min_messages` / `max_messages` — Integer range filter on message count
-- `sort_by` — `last_message_at` (default), `first_message_at`, `message_count`
-- `sort_order` — `desc` (default), `asc`
+All filters can be combined. Examples:
+
+```bash
+# Negative sentiment conversations that used the refund skill in January
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params start_date=2025-01-01T00:00:00Z end_date=2025-02-01T00:00:00Z \
+    sentiment=negative skill_name=refund-process limit=100 \
+  -o negative_refund.json
+
+# Handoff conversations with billing tag, sorted by message count
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params has_handoff=true tags=billing sort_by=message_count sort_order=desc \
+  -o billing_handoffs.json
+
+# Long conversations (10+ messages) with irrelevant resources
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params min_messages=10 resources=irrelevant limit=50 \
+  -o long_irrelevant.json
+```

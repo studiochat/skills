@@ -265,6 +265,7 @@ def main():
     parser.add_argument("--search", help="Search by conversation ID")
     parser.add_argument("--sentiment", help="Filter by sentiment: negative,neutral,positive")
     parser.add_argument("--resources", help="Filter by resource quality: irrelevant,partial,relevant")
+    parser.add_argument("--skill-name", help="Filter by skill name (conversations that loaded this skill)")
     parser.add_argument("--min-messages", type=int, help="Minimum message count")
     parser.add_argument("--max-messages", type=int, help="Maximum message count")
     parser.add_argument(
@@ -324,6 +325,8 @@ def main():
         filters["sentiment"] = args.sentiment
     if args.resources:
         filters["resources"] = args.resources
+    if args.skill_name:
+        filters["skill_name"] = args.skill_name
     if args.min_messages:
         filters["min_messages"] = str(args.min_messages)
     if args.max_messages:

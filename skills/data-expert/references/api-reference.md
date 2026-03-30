@@ -162,6 +162,7 @@ Paginated list of customer conversations with comprehensive filtering.
 | `resources` | string | | Comma-separated: `irrelevant`, `partial`, `relevant` (OR logic) |
 | `min_messages` | int | | Minimum message count |
 | `max_messages` | int | | Maximum message count |
+| `skill_name` | string | | Only conversations that loaded this skill (uses efficient EXISTS subquery) |
 | `sort_by` | string | `last_message_at` | `last_message_at`, `first_message_at`, or `message_count` |
 | `sort_order` | string | `desc` | `desc` or `asc` |
 
