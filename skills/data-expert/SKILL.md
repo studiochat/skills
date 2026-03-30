@@ -12,6 +12,13 @@ description: >
 
 Fetch data from the Studio Chat API, process it with Python, and produce actionable analysis. All API calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
+## Key Terminology
+
+**Assistants and playbooks are the same concept.** In the API, the term "playbook" is used
+everywhere — but users refer to them as "assistants." When the user says "assistant," "bot,"
+or "agent," they mean a playbook. Use `playbook_base_id` to filter by assistant (all versions)
+or `playbook_id` for a specific version.
+
 ## Setup
 
 Set the following environment variables before using the scripts:
@@ -544,8 +551,8 @@ Every conversation query supports these filter dimensions. All filters are serve
 | Dimension | Parameter | Type | Logic | Example |
 |-----------|-----------|------|-------|---------|
 | **Date range** | `start_date`, `end_date` | ISO 8601 string | Range on `last_message_at` | `start_date=2025-01-01T00:00:00Z` |
-| **Playbook (version)** | `playbook_id` | UUID | Exact match on specific version | `playbook_id=abc-123` |
-| **Playbook (all versions)** | `playbook_base_id` | UUID | All versions of an assistant | `playbook_base_id=def-456` |
+| **Assistant / Playbook (version)** | `playbook_id` | UUID | Exact match on specific version | `playbook_id=abc-123` |
+| **Assistant / Playbook (all versions)** | `playbook_base_id` | UUID | All versions of an assistant | `playbook_base_id=def-456` |
 | **Inbox / Channel** | `inbox_id` | UUID | Exact match (Website, WhatsApp, etc.) | `inbox_id=inbox-789` |
 | **Handoff** | `has_handoff` | bool | `true` = escalated, `false` = AI-resolved | `has_handoff=true` |
 | **Winback** | `has_winback` | bool | `true` = winback sent, `false` = not sent | `has_winback=true` |

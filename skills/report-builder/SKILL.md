@@ -11,6 +11,11 @@ description: >
 
 Create, configure, and manage automated reports via the Studio Chat Reports API. Reports are executed by SAMI in a sandbox with the `data-expert` skill — this skill focuses on *defining* reports, not executing them.
 
+## Key Terminology
+
+**Assistants and playbooks are the same concept.** Users say "assistant" — the API uses "playbook."
+The `playbook_base_ids` field in report configuration filters by assistant.
+
 ## Setup
 
 Uses the same environment variables as other Studio Chat skills:
