@@ -116,10 +116,15 @@ Returns: `id`, `base_id`, `name`, `version_number`, `content` (instructions), `k
 }
 ```
 
-### Update Playbook
-`PATCH /playbooks/{playbook_id}`
+### Get Latest Playbook Version
+`GET /playbooks/{base_id}/latest`
 
-Creates a new version automatically. All fields optional:
+Returns the most recent version of a playbook by base_id.
+
+### Update Latest Playbook Version (recommended)
+`PATCH /playbooks/{base_id}/latest`
+
+Always patches the most recent version. Creates a new version automatically. All fields optional:
 
 ```json
 {
@@ -129,6 +134,11 @@ Creates a new version automatically. All fields optional:
   "api_tools": ["tool_id_1"]
 }
 ```
+
+### Update Specific Playbook Version
+`PATCH /playbooks/{playbook_id}`
+
+Patches a specific version by ID (useful for intentional rollbacks). Same body as above.
 
 ### Delete Playbook
 `DELETE /playbooks/{playbook_id}` — Soft delete

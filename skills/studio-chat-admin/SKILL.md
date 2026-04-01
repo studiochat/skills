@@ -184,11 +184,26 @@ python3 scripts/api.py \
   }'
 ```
 
-### Update playbook (creates new version automatically)
+### Get latest playbook version
 
 ```bash
-python3 scripts/api.py "/playbooks/PLAYBOOK_ID" \
-  -X PATCH --body '{"content": "Updated instructions..."}'
+python3 scripts/api.py "/playbooks/BASE_ID/latest"
+```
+
+### Update playbook (creates new version automatically)
+
+**IMPORTANT:** Before updating instructions, ALWAYS fetch the latest version first using
+`GET /playbooks/BASE_ID/latest`, even if you already have the instructions in your context.
+The playbook may have been modified by another process since you last read it. Read the
+latest content, apply your changes on top of it, then send the PATCH.
+
+```bash
+# 1. Fetch the current latest version
+python3 scripts/api.py "/playbooks/BASE_ID/latest"
+
+# 2. Apply your changes on top of the fetched content and patch
+python3 scripts/api.py "/playbooks/BASE_ID/latest" \
+  -X PATCH --body '{"content": "Updated instructions based on latest..."}'
 ```
 
 ### Version management
