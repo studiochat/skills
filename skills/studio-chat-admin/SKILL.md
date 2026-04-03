@@ -1,7 +1,7 @@
 ---
 name: studio-chat-admin
 description: >
-  Manage Studio Chat project configuration — knowledge bases, playbooks, training, schedule,
+  Manage Studio Chat project configuration — knowledge bases, playbooks, syncing, schedule,
   and API tools. Use when asked to create, update, delete, or inspect KBs, playbooks, office hours,
   or any project settings. Covers all CRUD operations via the Studio Chat API.
 ---
@@ -11,7 +11,7 @@ description: >
 Read and write Studio Chat project configuration using the API. All calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
 **IMPORTANT: Always confirm before creating or modifying.** Never create knowledge bases,
-playbooks, API tools, or trigger training without explicit user confirmation. Show what
+playbooks, API tools, or trigger syncing without explicit user confirmation. Show what
 you're about to do and wait for approval before executing any write operation.
 
 ## Key Terminology
@@ -116,11 +116,11 @@ python3 scripts/api.py "/knowledgebases/KB_ID" -X DELETE
 python3 scripts/api.py "/knowledgebases/KB_ID/restore" -X POST
 ```
 
-**After KB changes, train the project to apply them.**
+**After KB changes, sync the project to apply them.**
 
 ### Correction Notes
 
-Add correction notes to individual KB items to override their content at query time. Notes take effect immediately — no retraining required.
+Add correction notes to individual KB items to override their content at query time. Notes take effect immediately — no syncing required.
 
 **List all notes in the project:**
 
@@ -234,15 +234,15 @@ python3 scripts/api.py "/playbooks/PLAYBOOK_ID/settings" \
 
 ---
 
-## Training
+## Syncing
 
-After modifying KBs, the project must be trained to apply changes.
+After modifying KBs, the project must be synced to apply changes. This re-indexes the knowledge base sources.
 
 ```bash
-# Train the project
+# Sync the project (re-index knowledge bases)
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/train" -X POST
 
-# Check training status
+# Check sync status
 python3 scripts/api.py "/jobs/JOB_ID"
 ```
 
@@ -390,8 +390,8 @@ Personality tones: `professional`, `friendly`, `casual`, `expert`, `playful`.
 
 ## Important Notes
 
-- **KB status flow**: ADDED -> (train) -> ACTIVE. After edits: ACTIVE -> EDITED -> (train) -> ACTIVE.
-- **Always train after KB changes**: Creating, updating, or deleting KBs requires retraining.
+- **KB status flow**: ADDED -> (sync) -> ACTIVE. After edits: ACTIVE -> EDITED -> (sync) -> ACTIVE.
+- **Always sync after KB changes**: Creating, updating, or deleting KBs requires syncing.
 - **Playbook versioning**: Every update creates a new version. Use `active` endpoint to control which version is live.
 - **Skills versioning**: Skill changes (add/edit/delete) also create new playbook versions. Use the dedicated skill endpoints for individual operations.
 - **base_id vs playbook_id**: Active version endpoints use `base_id` (stable across versions). Other endpoints use `playbook_id` (specific version). Skill endpoints use `base_id`.
