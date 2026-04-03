@@ -211,19 +211,19 @@ All fields optional:
 
 ---
 
-## Training
+## Syncing (Re-indexing Knowledge Bases)
 
-### Train Project
+### Sync Project
 `POST /projects/{pid}/train`
 
 Returns: `{job_id: "string"}`. No request body needed.
 
-### Check Training Job
+### Check Sync Job
 `GET /jobs/{job_id}`
 
 Returns: `{status: "pending"|"running"|"completed"|"failed", progress: 0-100, error: "string|null"}`
 
-### Check if Training Needed
+### Check if Sync Needed
 `GET /projects/{pid}`
 
 Check `needs_retraining` field in response.
@@ -371,7 +371,7 @@ Item types: `snippet`, `faq`, `notion`, `intercom`, `gdrive`.
 
 ## KB Item Correction Notes
 
-Correction notes are annotations attached to individual KB items. They override the original content at query time — no retraining needed. Notes take effect immediately.
+Correction notes are annotations attached to individual KB items. They override the original content at query time — no syncing needed. Notes take effect immediately.
 
 ### List all notes in a project
 
@@ -482,6 +482,6 @@ All item types support notes: FAQ (`faq_items[].id`), Snippets (`snippet_items[]
 ### How notes work
 
 - Notes are injected into RAG search results at query time (not indexed)
-- No retraining required — changes are immediate
+- No syncing required — changes are immediate
 - KB status is NOT changed when adding/removing notes
 - Notes override the original content for the LLM
