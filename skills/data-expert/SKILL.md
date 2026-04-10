@@ -729,6 +729,10 @@ Every conversation query supports these filter dimensions. All filters are serve
 | **Tags** | `tags` | comma-separated | **AND** logic — must have ALL tags | `tags=billing,refund` |
 | **Sentiment** | `sentiment` | comma-separated | **OR** logic — any of the values | `sentiment=negative,neutral` |
 | **Resources** | `resources` | comma-separated | **OR** logic — any of the values | `resources=irrelevant,partial` |
+| **Sentiment Shift** | `sentiment_shift` | comma-separated | **OR** logic | `sentiment_shift=degraded` |
+| **Deflection Quality** | `deflection_quality` | comma-separated | **OR** logic (non-handoff only) | `deflection_quality=gave_up,no_response` |
+| **Handoff Reason** | `handoff_reason` | comma-separated | **OR** logic (handoff only) | `handoff_reason=frustration,bot_limitation` |
+| **Recontact Risk** | `recontact_risk` | comma-separated | **OR** logic | `recontact_risk=high` |
 | **Message count** | `min_messages`, `max_messages` | int | Range filter | `min_messages=5&max_messages=20` |
 | **Skill** | `skill_name` | string | Conversations that loaded this skill | `skill_name=refund-process` |
 | **Search** | `search` | string | Substring match on conversation ID | `search=12345` |
@@ -809,4 +813,28 @@ python3 scripts/fetch.py \
   "/projects/$STUDIO_PROJECT_ID/conversations" \
   --params min_messages=10 resources=irrelevant limit=50 \
   -o long_irrelevant.json
+
+# Conversations where user gave up (false deflection)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params deflection_quality=gave_up limit=100 \
+  -o gave_up.json
+
+# Handoffs caused by frustration
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params handoff_reason=frustration limit=100 \
+  -o frustration_handoffs.json
+
+# High recontact risk conversations
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params recontact_risk=high limit=100 \
+  -o high_risk.json
+
+# Conversations where sentiment degraded
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params sentiment_shift=degraded limit=100 \
+  -o degraded.json
 ```

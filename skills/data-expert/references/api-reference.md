@@ -164,6 +164,10 @@ Paginated list of customer conversations with comprehensive filtering.
 | `tags` | string | | Comma-separated tags (AND logic — must have ALL tags) |
 | `sentiment` | string | | Comma-separated: `negative`, `neutral`, `positive` (OR logic) |
 | `resources` | string | | Comma-separated: `irrelevant`, `partial`, `relevant` (OR logic) |
+| `sentiment_shift` | string | | Comma-separated: `improved`, `stable`, `degraded` (OR logic) |
+| `deflection_quality` | string | | Comma-separated: `resolved`, `partial`, `gave_up`, `no_response` (OR logic) |
+| `handoff_reason` | string | | Comma-separated: `policy`, `user_request`, `frustration`, `bot_limitation` (OR logic) |
+| `recontact_risk` | string | | Comma-separated: `low`, `medium`, `high` (OR logic) |
 | `min_messages` | int | | Minimum message count |
 | `max_messages` | int | | Maximum message count |
 | `skill_name` | string | | Only conversations that loaded this skill (uses efficient EXISTS subquery) |
