@@ -134,7 +134,7 @@ coverage_percentage              float   % of conversations scored
 sentiment_distribution           object  {negative: int, neutral: int, positive: int}
 resources_distribution           object  {irrelevant: int, partial: int, relevant: int}
 sentiment_shift_distribution     object  {improved: int, stable: int, degraded: int}
-deflection_quality_distribution  object  {resolved: int, partial: int, gave_up: int, no_response: int}
+deflection_quality_distribution  object  {resolved: int, partial: int, actioned: int, no_response: int}
 handoff_reason_distribution      object  {policy: int, user_request: int, frustration: int, bot_limitation: int}
 recontact_risk_distribution      object  {low: int, medium: int, high: int}
 ```
@@ -165,7 +165,7 @@ Paginated list of customer conversations with comprehensive filtering.
 | `sentiment` | string | | Comma-separated: `negative`, `neutral`, `positive` (OR logic) |
 | `resources` | string | | Comma-separated: `irrelevant`, `partial`, `relevant` (OR logic) |
 | `sentiment_shift` | string | | Comma-separated: `improved`, `stable`, `degraded` (OR logic) |
-| `deflection_quality` | string | | Comma-separated: `resolved`, `partial`, `gave_up`, `no_response` (OR logic) |
+| `deflection_quality` | string | | Comma-separated: `resolved`, `partial`, `actioned`, `no_response` (OR logic) |
 | `handoff_reason` | string | | Comma-separated: `policy`, `user_request`, `frustration`, `bot_limitation` (OR logic) |
 | `recontact_risk` | string | | Comma-separated: `low`, `medium`, `high` (OR logic) |
 | `min_messages` | int | | Minimum message count |
@@ -201,7 +201,7 @@ summary                     string  AI-generated conversation summary (null if u
 user_intent                 string  Short phrase describing what the user wanted (null if unscored)
 sentiment_shift             string  "improved", "stable", or "degraded" (null if unscored)
 sentiment_shift_reason      string  Explanation of sentiment shift (null if unscored)
-deflection_quality          string  "resolved", "partial", "gave_up", or "no_response" (null if handoff or unscored)
+deflection_quality          string  "resolved", "partial", "actioned", or "no_response" (null if handoff or unscored)
 deflection_quality_reason   string  Explanation of deflection quality (null if handoff or unscored)
 handoff_reason              string  "policy", "user_request", "frustration", or "bot_limitation" (null if no handoff or unscored)
 handoff_reason_detail       string  Explanation of handoff reason (null if no handoff or unscored)
@@ -253,7 +253,7 @@ last_message_at             string  ISO 8601 timestamp of last message
 skills                      array   Skill names loaded during the conversation (null if none)
 user_intent                 string  Short phrase: what the user wanted (null if unscored)
 sentiment_shift             string  "improved", "stable", or "degraded" (null if unscored)
-deflection_quality          string  "resolved", "partial", "gave_up", or "no_response" (null if handoff or unscored)
+deflection_quality          string  "resolved", "partial", "actioned", or "no_response" (null if handoff or unscored)
 handoff_reason              string  "policy", "user_request", "frustration", or "bot_limitation" (null if no handoff or unscored)
 recontact_risk              string  "low", "medium", or "high" (null if unscored)
 ```
@@ -367,7 +367,7 @@ summary                     string  2-3 sentence conversation summary including 
 user_intent                 string  Short phrase describing what the user wanted
 sentiment_shift             string  "improved", "stable", or "degraded"
 sentiment_shift_reason      string  LLM explanation of sentiment shift
-deflection_quality          string  "resolved", "partial", "gave_up", or "no_response" (null if handoff)
+deflection_quality          string  "resolved", "partial", "actioned", or "no_response" (null if handoff)
 deflection_quality_reason   string  LLM explanation of deflection quality
 handoff_reason              string  "policy", "user_request", "frustration", or "bot_limitation" (null if no handoff)
 handoff_reason_detail       string  LLM explanation of handoff reason

@@ -466,7 +466,7 @@ total = agg["total_scored_conversations"]
 # Deflection quality — how well bot-resolved conversations actually went
 defl = agg.get("deflection_quality_distribution", {})
 print("Deflection Quality:")
-for label in ["resolved", "partial", "gave_up", "no_response"]:
+for label in ["resolved", "partial", "actioned", "no_response"]:
     count = defl.get(label, 0)
     pct = (count / total * 100) if total else 0
     print(f"  {label}: {count} ({pct:.1f}%)")
@@ -730,7 +730,7 @@ Every conversation query supports these filter dimensions. All filters are serve
 | **Sentiment** | `sentiment` | comma-separated | **OR** logic — any of the values | `sentiment=negative,neutral` |
 | **Resources** | `resources` | comma-separated | **OR** logic — any of the values | `resources=irrelevant,partial` |
 | **Sentiment Shift** | `sentiment_shift` | comma-separated | **OR** logic | `sentiment_shift=degraded` |
-| **Deflection Quality** | `deflection_quality` | comma-separated | **OR** logic (non-handoff only) | `deflection_quality=gave_up,no_response` |
+| **Deflection Quality** | `deflection_quality` | comma-separated | **OR** logic (non-handoff only) | `deflection_quality=actioned,no_response` |
 | **Handoff Reason** | `handoff_reason` | comma-separated | **OR** logic (handoff only) | `handoff_reason=frustration,bot_limitation` |
 | **Recontact Risk** | `recontact_risk` | comma-separated | **OR** logic | `recontact_risk=high` |
 | **Message count** | `min_messages`, `max_messages` | int | Range filter | `min_messages=5&max_messages=20` |
@@ -770,7 +770,7 @@ Always scope queries with `start_date` and `end_date` in ISO 8601 format.
 | Sentiment | `negative`, `neutral`, `positive` | Customer emotional state (LLM-scored) |
 | Resources | `irrelevant`, `partial`, `relevant` | How well KBs/tools served the conversation |
 | Sentiment Shift | `improved`, `stable`, `degraded` | How sentiment changed during conversation |
-| Deflection Quality | `resolved`, `partial`, `gave_up`, `no_response` | Resolution quality for non-handoff conversations |
+| Deflection Quality | `resolved`, `partial`, `actioned`, `no_response` | Resolution quality for non-handoff conversations |
 | Handoff Reason | `policy`, `user_request`, `frustration`, `bot_limitation` | Why conversation was escalated (handoff only) |
 | Recontact Risk | `low`, `medium`, `high` | Likelihood of user returning with same issue |
 
@@ -814,11 +814,11 @@ python3 scripts/fetch.py \
   --params min_messages=10 resources=irrelevant limit=50 \
   -o long_irrelevant.json
 
-# Conversations where user gave up (false deflection)
+# Conversations where bot created a follow-up action (ticket, email, etc.)
 python3 scripts/fetch.py \
   "/projects/$STUDIO_PROJECT_ID/conversations" \
-  --params deflection_quality=gave_up limit=100 \
-  -o gave_up.json
+  --params deflection_quality=actioned limit=100 \
+  -o actioned.json
 
 # Handoffs caused by frustration
 python3 scripts/fetch.py \
