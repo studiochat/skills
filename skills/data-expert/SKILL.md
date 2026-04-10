@@ -50,7 +50,8 @@ python3 scripts/export_conversations.py \
 ```
 
 Every conversation includes all metadata inline: summary, sentiment (label + reason),
-resources (label + reason), skills, tags, handoff status, message count, latency, model.
+resources (label + reason), user_intent, sentiment_shift, deflection_quality, handoff_reason,
+recontact_risk (each with label + reason), skills, tags, handoff status, message count, latency, model.
 Use `--messages` to also fetch full message history (one API call per conversation).
 
 ## Workflow
@@ -72,14 +73,14 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 |----------|---------|
 | `GET /projects/{pid}/conversations/analytics` | Totals, deflection rate, time series, breakdowns by playbook/tag |
 | `GET /account/conversations/analytics` | Account-wide totals across all projects |
-| `GET /projects/{pid}/conversations/metrics/aggregate` | Sentiment + resource-quality distributions (filterable by tags, inbox_id, playbook_base_id) |
+| `GET /projects/{pid}/conversations/metrics/aggregate` | Sentiment, resource-quality, sentiment shift, deflection quality, handoff reason, and recontact risk distributions (filterable by tags, inbox_id, playbook_base_id) |
 
 ### Conversation Data
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /projects/{pid}/conversations` | Paginated list with all metadata inline: summary, sentiment (label+reason), resources (label+reason), skills, tags, handoff, message_count, latency, model. Filters: playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting |
-| `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning: summary, sentiment, resources, tags, has_handoff, message_count, skills |
+| `GET /projects/{pid}/conversations` | Paginated list with all metadata inline: summary, user_intent, sentiment (label+reason), resources (label+reason), sentiment_shift, deflection_quality, handoff_reason, recontact_risk (each with label+reason), skills, tags, handoff, message_count, latency, model. Filters: playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting |
+| `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning: summary, sentiment, resources, user_intent, sentiment_shift, deflection_quality, handoff_reason, recontact_risk, tags, has_handoff, message_count, skills |
 | `GET /projects/{pid}/conversations/{cid}` | **Full detail**: all metadata + complete message history with per-message token usage/cost + tool calls + citations |
 | `POST /projects/{pid}/conversations/batch` | **Batch detail**: same as above for up to 50 conversations in a single request. Body: `{"conversation_ids": [...]}` |
 | `GET /projects/{pid}/conversations/{cid}/messages` | Message history + citations (without metadata — prefer the detail endpoint above) |
@@ -452,6 +453,49 @@ for label in ["positive", "neutral", "negative"]:
     print(f"  {label}: {count} ({pct:.1f}%)")
 ```
 
+### Conversation Signal Analysis
+
+```python
+import json
+
+with open("metrics_agg.json") as f:
+    agg = json.load(f)
+
+total = agg["total_scored_conversations"]
+
+# Deflection quality — how well bot-resolved conversations actually went
+defl = agg.get("deflection_quality_distribution", {})
+print("Deflection Quality:")
+for label in ["resolved", "partial", "actioned", "no_response"]:
+    count = defl.get(label, 0)
+    pct = (count / total * 100) if total else 0
+    print(f"  {label}: {count} ({pct:.1f}%)")
+
+# Handoff reasons — why conversations were escalated
+ho = agg.get("handoff_reason_distribution", {})
+print("\nHandoff Reasons:")
+for label in ["policy", "user_request", "frustration", "bot_limitation"]:
+    count = ho.get(label, 0)
+    pct = (count / total * 100) if total else 0
+    print(f"  {label}: {count} ({pct:.1f}%)")
+
+# Recontact risk — likelihood of customer returning
+risk = agg.get("recontact_risk_distribution", {})
+print("\nRecontact Risk:")
+for label in ["low", "medium", "high"]:
+    count = risk.get(label, 0)
+    pct = (count / total * 100) if total else 0
+    print(f"  {label}: {count} ({pct:.1f}%)")
+
+# Sentiment shift — did the bot make things better or worse?
+shift = agg.get("sentiment_shift_distribution", {})
+print("\nSentiment Shift:")
+for label in ["improved", "stable", "degraded"]:
+    count = shift.get(label, 0)
+    pct = (count / total * 100) if total else 0
+    print(f"  {label}: {count} ({pct:.1f}%)")
+```
+
 ### API Tool Usage Analysis
 
 ```python
@@ -638,6 +682,32 @@ bad_handoffs = [c for c in convs if c.get("has_handoff") and c.get("sentiment_la
 print(f"\nNegative handoffs: {len(bad_handoffs)}")
 for c in bad_handoffs[:5]:
     print(f"  [{c['conversation_id']}] {c.get('summary', 'no summary')[:80]}")
+
+# Deflection quality breakdown (non-handoff only)
+defl_counts = {}
+for c in convs:
+    dq = c.get("deflection_quality")
+    if dq:
+        defl_counts[dq] = defl_counts.get(dq, 0) + 1
+print("\nDeflection Quality:")
+for label, count in sorted(defl_counts.items()):
+    print(f"  {label}: {count}")
+
+# Handoff reasons (handoff only)
+ho_counts = {}
+for c in convs:
+    hr = c.get("handoff_reason")
+    if hr:
+        ho_counts[hr] = ho_counts.get(hr, 0) + 1
+print("\nHandoff Reasons:")
+for label, count in sorted(ho_counts.items()):
+    print(f"  {label}: {count}")
+
+# High recontact risk conversations
+high_risk = [c for c in convs if c.get("recontact_risk") == "high"]
+print(f"\nHigh recontact risk: {len(high_risk)}")
+for c in high_risk[:5]:
+    print(f"  [{c['conversation_id']}] {c.get('user_intent', 'no intent')}: {c.get('recontact_risk_reason', '')[:80]}")
 ```
 
 ---
@@ -659,6 +729,10 @@ Every conversation query supports these filter dimensions. All filters are serve
 | **Tags** | `tags` | comma-separated | **AND** logic — must have ALL tags | `tags=billing,refund` |
 | **Sentiment** | `sentiment` | comma-separated | **OR** logic — any of the values | `sentiment=negative,neutral` |
 | **Resources** | `resources` | comma-separated | **OR** logic — any of the values | `resources=irrelevant,partial` |
+| **Sentiment Shift** | `sentiment_shift` | comma-separated | **OR** logic | `sentiment_shift=degraded` |
+| **Deflection Quality** | `deflection_quality` | comma-separated | **OR** logic (non-handoff only) | `deflection_quality=actioned,no_response` |
+| **Handoff Reason** | `handoff_reason` | comma-separated | **OR** logic (handoff only) | `handoff_reason=frustration,bot_limitation` |
+| **Recontact Risk** | `recontact_risk` | comma-separated | **OR** logic | `recontact_risk=high` |
 | **Message count** | `min_messages`, `max_messages` | int | Range filter | `min_messages=5&max_messages=20` |
 | **Skill** | `skill_name` | string | Conversations that loaded this skill | `skill_name=refund-process` |
 | **Search** | `search` | string | Substring match on conversation ID | `search=12345` |
@@ -693,8 +767,22 @@ Always scope queries with `start_date` and `end_date` in ISO 8601 format.
 
 | Type | Values | Meaning |
 |------|--------|---------|
-| Sentiment | `negative`, `neutral`, `positive` | Customer satisfaction (LLM-scored) |
-| Resources | `irrelevant`, `partial`, `relevant` | How well KBs served the conversation |
+| Sentiment | `negative`, `neutral`, `positive` | Customer emotional state (LLM-scored) |
+| Resources | `irrelevant`, `partial`, `relevant` | How well KBs/tools served the conversation |
+| Sentiment Shift | `improved`, `stable`, `degraded` | How sentiment changed during conversation |
+| Deflection Quality | `resolved`, `partial`, `actioned`, `no_response` | Resolution quality for non-handoff conversations |
+| Handoff Reason | `policy`, `user_request`, `frustration`, `bot_limitation` | Why conversation was escalated (handoff only) |
+| Recontact Risk | `low`, `medium`, `high` | Likelihood of user returning with same issue |
+
+**Conditional signals:**
+- `deflection_quality` is only present when `has_handoff=false` (bot-resolved conversations)
+- `handoff_reason` is only present when `has_handoff=true` (escalated conversations)
+- `resources` is only present when tool calls were used in the conversation
+- All other signals (sentiment, sentiment_shift, recontact_risk, user_intent, summary) are always present when scored
+
+**Free text signals:**
+- `user_intent` — short phrase describing what the user wanted (e.g., "cancel subscription", "pricing for enterprise plan")
+- `summary` — 2-3 sentence summary of the full conversation flow including tools/KBs used
 
 ### Deflection Rate
 
@@ -725,4 +813,28 @@ python3 scripts/fetch.py \
   "/projects/$STUDIO_PROJECT_ID/conversations" \
   --params min_messages=10 resources=irrelevant limit=50 \
   -o long_irrelevant.json
+
+# Conversations where bot created a follow-up action (ticket, email, etc.)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params deflection_quality=actioned limit=100 \
+  -o actioned.json
+
+# Handoffs caused by frustration
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params handoff_reason=frustration limit=100 \
+  -o frustration_handoffs.json
+
+# High recontact risk conversations
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params recontact_risk=high limit=100 \
+  -o high_risk.json
+
+# Conversations where sentiment degraded
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations" \
+  --params sentiment_shift=degraded limit=100 \
+  -o degraded.json
 ```
