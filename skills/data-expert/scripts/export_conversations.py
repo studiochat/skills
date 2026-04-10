@@ -203,6 +203,7 @@ def write_csv(conversations, output_path):
         "inbox_name",
         "playbook_name",
         "playbook_version",
+        "playbooks_info",
         "message_count",
         "first_message_at",
         "last_message_at",
