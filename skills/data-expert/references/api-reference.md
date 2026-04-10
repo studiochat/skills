@@ -128,11 +128,15 @@ Sentiment and resource-quality distributions across scored conversations.
 **Response fields:**
 
 ```
-total_conversations         int     Total conversations in range
-total_scored_conversations  int     Conversations with metrics
-coverage_percentage         float   % of conversations scored
-sentiment_distribution      object  {negative: int, neutral: int, positive: int}
-resources_distribution      object  {irrelevant: int, partial: int, relevant: int}
+total_conversations              int     Total conversations in range
+total_scored_conversations       int     Conversations with metrics
+coverage_percentage              float   % of conversations scored
+sentiment_distribution           object  {negative: int, neutral: int, positive: int}
+resources_distribution           object  {irrelevant: int, partial: int, relevant: int}
+sentiment_shift_distribution     object  {improved: int, stable: int, degraded: int}
+deflection_quality_distribution  object  {resolved: int, partial: int, gave_up: int, no_response: int}
+handoff_reason_distribution      object  {policy: int, user_request: int, frustration: int, bot_limitation: int}
+recontact_risk_distribution      object  {low: int, medium: int, high: int}
 ```
 
 ---
@@ -190,6 +194,15 @@ sentiment_reason            string  Explanation of sentiment scoring (null if un
 resources_label             string  "irrelevant", "partial", or "relevant" (null if unscored)
 resources_reason            string  Explanation of resource relevance scoring (null if unscored)
 summary                     string  AI-generated conversation summary (null if unscored)
+user_intent                 string  Short phrase describing what the user wanted (null if unscored)
+sentiment_shift             string  "improved", "stable", or "degraded" (null if unscored)
+sentiment_shift_reason      string  Explanation of sentiment shift (null if unscored)
+deflection_quality          string  "resolved", "partial", "gave_up", or "no_response" (null if handoff or unscored)
+deflection_quality_reason   string  Explanation of deflection quality (null if handoff or unscored)
+handoff_reason              string  "policy", "user_request", "frustration", or "bot_limitation" (null if no handoff or unscored)
+handoff_reason_detail       string  Explanation of handoff reason (null if no handoff or unscored)
+recontact_risk              string  "low", "medium", or "high" (null if unscored)
+recontact_risk_reason       string  Explanation of recontact risk (null if unscored)
 model                       string  LLM model used (e.g., "gpt-4o-mini")
 winback_sent_at             string  ISO 8601 timestamp when winback was sent (null if not sent)
 context                     object  Context dict passed to the agent (contact info, etc.)
@@ -234,6 +247,11 @@ has_handoff                 bool    Whether escalated to human
 message_count               int     Total messages
 last_message_at             string  ISO 8601 timestamp of last message
 skills                      array   Skill names loaded during the conversation (null if none)
+user_intent                 string  Short phrase: what the user wanted (null if unscored)
+sentiment_shift             string  "improved", "stable", or "degraded" (null if unscored)
+deflection_quality          string  "resolved", "partial", "gave_up", or "no_response" (null if handoff or unscored)
+handoff_reason              string  "policy", "user_request", "frustration", or "bot_limitation" (null if no handoff or unscored)
+recontact_risk              string  "low", "medium", or "high" (null if unscored)
 ```
 
 **Pagination:** Response includes `total`, `limit`, `offset`.
@@ -339,9 +357,18 @@ Quality metrics for a single conversation. Returns `null` fields if not yet scor
 ```
 sentiment_label             string  "negative", "neutral", or "positive"
 sentiment_reason            string  LLM explanation of sentiment score
-resources_label             string  "irrelevant", "partial", or "relevant"
+resources_label             string  "irrelevant", "partial", or "relevant" (null if no tools used)
 resources_reason            string  LLM explanation of resource quality
-summary                     string  One-paragraph conversation summary
+summary                     string  2-3 sentence conversation summary including tools/KBs used
+user_intent                 string  Short phrase describing what the user wanted
+sentiment_shift             string  "improved", "stable", or "degraded"
+sentiment_shift_reason      string  LLM explanation of sentiment shift
+deflection_quality          string  "resolved", "partial", "gave_up", or "no_response" (null if handoff)
+deflection_quality_reason   string  LLM explanation of deflection quality
+handoff_reason              string  "policy", "user_request", "frustration", or "bot_limitation" (null if no handoff)
+handoff_reason_detail       string  LLM explanation of handoff reason
+recontact_risk              string  "low", "medium", or "high"
+recontact_risk_reason       string  LLM explanation of recontact risk
 scored_at                   string  ISO 8601 when scoring happened
 message_count_at_scoring    int     Messages present when scored
 ```
