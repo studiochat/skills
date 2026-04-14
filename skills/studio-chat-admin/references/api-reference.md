@@ -374,13 +374,15 @@ Each item includes `last_run_at` and `last_triggered_at` from the most recent ru
 ```json
 {
   "name": "string (required)",
-  "instructions": "string (required, conditions to evaluate)",
+  "instructions": "string (required — plain text for single condition, or JSON-encoded array for multi-condition)",
   "cron_expression": "string (required, minimum 10-min interval)",
   "playbook_base_ids": ["string (optional)"],
   "slack_channel": "string (optional)",
   "email_recipients": ["string (optional)"]
 }
 ```
+
+**Multi-condition format:** Pass `instructions` as a JSON-serialized array of strings: `"[\"Condition 1\", \"Condition 2\"]"`. Each condition gets an index (0, 1, ...) and is evaluated independently. The alert triggers if ANY condition is met.
 
 Returns: `AlertDefinition` (201)
 

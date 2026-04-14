@@ -403,6 +403,8 @@ Returns all alert definitions for the project with `last_run_at` and `last_trigg
 
 ### Create alert
 
+**Single condition:**
+
 ```bash
 python3 scripts/api.py \
   "/projects/$STUDIO_PROJECT_ID/alerts" \
@@ -416,9 +418,32 @@ python3 scripts/api.py \
   }'
 ```
 
+**Multi-condition** — pass `instructions` as a JSON array of strings. Each condition is evaluated independently by index; the alert triggers if ANY condition is met:
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/alerts" \
+  -X POST --body '{
+    "name": "Quality monitor",
+    "instructions": "[\"Handoff rate exceeds 30%\", \"Negative sentiment above 50%\", \"Conversation volume dropped by more than 40%\"]",
+    "cron_expression": "0 */6 * * *",
+    "slack_channel": "alerts-channel"
+  }'
+```
+
+The executor evaluates each condition independently and returns per-condition results in the run's `trigger_summary`:
+
+```json
+[
+  {"index": 0, "condition": "Handoff rate exceeds 30%", "triggered": true, "summary": "Handoff at 35%"},
+  {"index": 1, "condition": "Negative sentiment above 50%", "triggered": false, "summary": "At 12%, within normal range"},
+  {"index": 2, "condition": "Volume dropped by more than 40%", "triggered": false, "summary": "Volume stable at +2%"}
+]
+```
+
 Fields:
 - `name` (required) — Alert display name
-- `instructions` (required) — Conditions to evaluate (natural language, can include multiple conditions as JSON array or plain text)
+- `instructions` (required) — Plain text (single condition) or JSON array of strings (multi-condition). Conditions are written in natural language and evaluated by the data-expert skill against real conversation data.
 - `cron_expression` (required) — Cron schedule (minimum 10-minute interval)
 - `playbook_base_ids` (optional) — Filter analysis to specific playbooks
 - `slack_channel` (optional) — Slack channel name for notifications
