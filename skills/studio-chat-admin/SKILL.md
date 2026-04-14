@@ -2,8 +2,9 @@
 name: studio-chat-admin
 description: >
   Manage Studio Chat project configuration — knowledge bases, playbooks, syncing, schedule,
-  and API tools. Use when asked to create, update, delete, or inspect KBs, playbooks, office hours,
-  or any project settings. Covers all CRUD operations via the Studio Chat API.
+  API tools, alerts, and trending topics. Use when asked to create, update, delete, or inspect
+  KBs, playbooks, office hours, alerts, or any project settings. Also use to generate and browse
+  trending topics analyses. Covers all CRUD operations via the Studio Chat API.
 ---
 
 # Studio Chat Admin
@@ -385,6 +386,193 @@ python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/settings" \
 ```
 
 Personality tones: `professional`, `friendly`, `casual`, `expert`, `playful`.
+
+---
+
+## Alerts
+
+Alerts are cron-based condition monitors that evaluate custom conditions and notify via Slack and/or email when triggered. Each alert has a set of conditions (written as natural language instructions), a cron schedule (minimum 10-minute interval), and optional notification channels.
+
+### List alerts
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/alerts"
+```
+
+Returns all alert definitions for the project with `last_run_at` and `last_triggered_at` timestamps.
+
+### Create alert
+
+**Single condition:**
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/alerts" \
+  -X POST --body '{
+    "name": "High handoff rate",
+    "instructions": "Check if the handoff rate exceeds 30% in the last period",
+    "cron_expression": "*/30 * * * *",
+    "playbook_base_ids": ["BASE_ID_1"],
+    "slack_channel": "alerts-channel",
+    "email_recipients": ["team@example.com"]
+  }'
+```
+
+**Multi-condition** — pass `instructions` as a JSON array of strings. Each condition is evaluated independently by index; the alert triggers if ANY condition is met:
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/alerts" \
+  -X POST --body '{
+    "name": "Quality monitor",
+    "instructions": "[\"Handoff rate exceeds 30%\", \"Negative sentiment above 50%\", \"Conversation volume dropped by more than 40%\"]",
+    "cron_expression": "0 */6 * * *",
+    "slack_channel": "alerts-channel"
+  }'
+```
+
+The executor evaluates each condition independently and returns per-condition results in the run's `trigger_summary`:
+
+```json
+[
+  {"index": 0, "condition": "Handoff rate exceeds 30%", "triggered": true, "summary": "Handoff at 35%"},
+  {"index": 1, "condition": "Negative sentiment above 50%", "triggered": false, "summary": "At 12%, within normal range"},
+  {"index": 2, "condition": "Volume dropped by more than 40%", "triggered": false, "summary": "Volume stable at +2%"}
+]
+```
+
+Fields:
+- `name` (required) — Alert display name
+- `instructions` (required) — Plain text (single condition) or JSON array of strings (multi-condition). Conditions are written in natural language and evaluated by the data-expert skill against real conversation data.
+- `cron_expression` (required) — Cron schedule (minimum 10-minute interval)
+- `playbook_base_ids` (optional) — Filter analysis to specific playbooks
+- `slack_channel` (optional) — Slack channel name for notifications
+- `email_recipients` (optional) — List of email addresses for notifications
+
+At least one notification channel (`slack_channel` or `email_recipients`) should be configured for the alert to be useful.
+
+### Get alert
+
+```bash
+python3 scripts/api.py "/alerts/ALERT_ID"
+```
+
+### Update alert
+
+```bash
+python3 scripts/api.py "/alerts/ALERT_ID" \
+  -X PATCH --body '{"cron_expression": "0 */6 * * *", "is_enabled": false}'
+```
+
+All fields optional: `name`, `instructions`, `cron_expression`, `playbook_base_ids`, `slack_channel`, `email_recipients`, `is_enabled`.
+
+### Delete alert
+
+```bash
+python3 scripts/api.py "/alerts/ALERT_ID" -X DELETE
+```
+
+Soft delete — requires human user (API keys cannot delete).
+
+### Test run an alert
+
+Triggers a manual test run using the alert's cron interval as the evaluation window. Returns immediately with a run object (status `pending`); execution happens in the background.
+
+```bash
+python3 scripts/api.py "/alerts/ALERT_ID/test" -X POST
+```
+
+### List alert runs
+
+```bash
+python3 scripts/api.py "/alerts/ALERT_ID/runs" --params limit=20 offset=0
+```
+
+Returns past executions (newest first) with: `status`, `triggered`, `trigger_summary`, `window_start`, `window_end`, `execution_log`.
+
+### Get a specific run
+
+```bash
+python3 scripts/api.py "/alerts/runs/RUN_ID"
+```
+
+---
+
+## Trending Topics
+
+Trending topics analysis identifies the top conversation themes for a project over a configurable time window. Analysis runs asynchronously via a background job with progress tracking.
+
+### Generate analysis
+
+Starts a new trending topics analysis job. Returns a `job_id` to poll for progress.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/insights/trending-topics/generate" \
+  -X POST --body '{
+    "playbook_base_ids": ["BASE_ID_1"],
+    "time_window_days": 14
+  }'
+```
+
+Fields (all optional):
+- `playbook_base_ids` — Filter to specific playbooks
+- `tags` — Filter by conversation tags
+- `time_window_days` — Analysis window in days (1-90, default 7)
+
+Returns 409 if an analysis already exists for today with the same config, or a job is already running.
+
+### Check status
+
+Quick status check — returns the current state (completed analysis, running job, or not found).
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/insights/trending-topics/status" \
+  --params "time_window_days=14"
+```
+
+Optional query params: `playbook_base_ids` (comma-separated), `tags` (comma-separated), `time_window_days`.
+
+### Poll job progress
+
+After generating, poll this endpoint to track progress (0-100%).
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/insights/trending-topics/job/JOB_ID"
+```
+
+Returns: `status` (pending/running/completed/failed), `progress` (0-100), `step`, `progress_message`, `analysis_id` (when completed).
+
+### Get analysis
+
+Fetch the full results of a completed analysis.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/insights/trending-topics/analysis/ANALYSIS_ID"
+```
+
+Returns: `topics` (up to 5 trending topics with conversation counts, sentiment breakdown, handoff rates, example conversations), `total_conversations`, `conversations_analyzed`, `time_window_days`, `playbook_base_ids`.
+
+### List past analyses
+
+Browse all past analyses for a project, newest first.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/insights/trending-topics/analyses" \
+  --params limit=20 offset=0
+```
+
+### Export analysis as PDF
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/conversations/insights/trending-topics/analysis/ANALYSIS_ID/pdf" \
+  -o trending-topics-report.pdf
+```
 
 ---
 

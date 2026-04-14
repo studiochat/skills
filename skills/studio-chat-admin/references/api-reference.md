@@ -359,6 +359,225 @@ Returns: `{project_id, settings: {personality_tone, user_enrichment_url}}`
 
 ---
 
+## Alerts
+
+### List Alerts
+`GET /projects/{pid}/alerts`
+
+Returns: `{items: [AlertDefinition], total: int}`
+
+Each item includes `last_run_at` and `last_triggered_at` from the most recent runs.
+
+### Create Alert
+`POST /projects/{pid}/alerts`
+
+```json
+{
+  "name": "string (required)",
+  "instructions": "string (required — plain text for single condition, or JSON-encoded array for multi-condition)",
+  "cron_expression": "string (required, minimum 10-min interval)",
+  "playbook_base_ids": ["string (optional)"],
+  "slack_channel": "string (optional)",
+  "email_recipients": ["string (optional)"]
+}
+```
+
+**Multi-condition format:** Pass `instructions` as a JSON-serialized array of strings: `"[\"Condition 1\", \"Condition 2\"]"`. Each condition gets an index (0, 1, ...) and is evaluated independently. The alert triggers if ANY condition is met.
+
+Returns: `AlertDefinition` (201)
+
+### Get Alert
+`GET /alerts/{alert_id}`
+
+Returns: `AlertDefinition` with `last_run_at`, `last_triggered_at`.
+
+### Update Alert
+`PATCH /alerts/{alert_id}`
+
+All fields optional:
+
+```json
+{
+  "name": "string",
+  "instructions": "string",
+  "cron_expression": "string",
+  "playbook_base_ids": ["string"],
+  "slack_channel": "string",
+  "email_recipients": ["string"],
+  "is_enabled": "bool"
+}
+```
+
+### Delete Alert
+`DELETE /alerts/{alert_id}` — Soft delete (204). Requires human user.
+
+### Test Run Alert
+`POST /alerts/{alert_id}/test`
+
+Triggers manual execution using the cron interval as the evaluation window. Returns: `AlertRun` (202). Execution runs in background.
+
+### List Alert Runs
+`GET /alerts/{alert_id}/runs`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | int | 50 | Results per page |
+| `offset` | int | 0 | Skip N results |
+
+Returns: `{items: [AlertRun], total: int}` (newest first)
+
+### Get Alert Run
+`GET /alerts/runs/{run_id}`
+
+Returns: `AlertRun`
+
+### AlertDefinition fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Alert ID |
+| `project_id` | UUID | Project ID |
+| `name` | string | Display name |
+| `instructions` | string | Conditions to evaluate |
+| `cron_expression` | string | Cron schedule |
+| `playbook_base_ids` | string[] | Playbook filter |
+| `slack_channel` | string | Slack channel name |
+| `email_recipients` | string[] | Email addresses |
+| `is_enabled` | bool | Whether alert is active |
+| `last_run_at` | datetime | Last execution time |
+| `last_triggered_at` | datetime | Last time conditions triggered |
+| `created_at` | datetime | Created timestamp |
+| `updated_at` | datetime | Updated timestamp |
+
+### AlertRun fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Run ID |
+| `alert_definition_id` | UUID | Parent alert ID |
+| `status` | string | `pending`, `running`, `completed`, `failed` |
+| `triggered` | bool | Whether conditions were triggered |
+| `trigger_summary` | string | Summary of evaluation results |
+| `window_start` | datetime | Evaluation window start |
+| `window_end` | datetime | Evaluation window end |
+| `sami_session_id` | UUID | SAMI session used for evaluation |
+| `error_message` | string | Error details (on failure) |
+| `execution_log` | array | Log entries: `[{ts, step, detail}]` |
+| `started_at` | datetime | Execution start time |
+| `completed_at` | datetime | Execution end time |
+| `created_at` | datetime | Created timestamp |
+
+---
+
+## Trending Topics
+
+### Generate Analysis
+`POST /projects/{pid}/conversations/insights/trending-topics/generate`
+
+```json
+{
+  "playbook_base_ids": ["string (optional)"],
+  "tags": ["string (optional)"],
+  "time_window_days": "int (optional, 1-90, default 7)"
+}
+```
+
+Returns: `{job_id: "string", status: "pending"}` (200). Returns 409 if analysis already exists for today with same config.
+
+### Check Status
+`GET /projects/{pid}/conversations/insights/trending-topics/status`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `playbook_base_ids` | string | — | Comma-separated playbook base IDs |
+| `tags` | string | — | Comma-separated tags |
+| `time_window_days` | int | 7 | Time window in days (1-90) |
+
+Returns:
+
+```json
+{
+  "status": "completed|running|pending|failed|not_found",
+  "can_regenerate": "bool",
+  "analysis": "TrendingTopicsAnalysisInfo (if completed)",
+  "job": "TrendingTopicsJobInfo (if running/pending)",
+  "error_message": "string (if failed)"
+}
+```
+
+### Poll Job Progress
+`GET /projects/{pid}/conversations/insights/trending-topics/job/{job_id}`
+
+Returns:
+
+```json
+{
+  "id": "UUID",
+  "status": "pending|running|completed|failed",
+  "progress": "0-100",
+  "step": "fetching_data|identifying_topics|classifying|aggregating|saving",
+  "progress_message": "string",
+  "analysis_id": "UUID (when completed)",
+  "error_message": "string (on failure)",
+  "started_at": "datetime",
+  "completed_at": "datetime"
+}
+```
+
+### Get Analysis
+`GET /projects/{pid}/conversations/insights/trending-topics/analysis/{analysis_id}`
+
+Returns: `TrendingTopicsAnalysisInfo`
+
+### List Past Analyses
+`GET /projects/{pid}/conversations/insights/trending-topics/analyses`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | int | 20 | Results per page |
+| `offset` | int | 0 | Skip N results |
+
+Returns: `{items: [TrendingTopicsAnalysisInfo], total: int}` (newest first)
+
+### Export Analysis as PDF
+`GET /projects/{pid}/conversations/insights/trending-topics/analysis/{analysis_id}/pdf`
+
+Returns: PDF file (binary). Use `-o filename.pdf` with the API client.
+
+### TrendingTopicsAnalysisInfo fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Analysis ID |
+| `analysis_date` | string | Date (YYYY-MM-DD) |
+| `topics` | array | Up to 5 trending topics |
+| `total_conversations` | int | Total conversations in window |
+| `conversations_analyzed` | int | Conversations with summaries |
+| `created_at` | string | ISO timestamp |
+| `start_date` | string | Window start (ISO) |
+| `end_date` | string | Window end (ISO) |
+| `time_window_days` | int | Window size in days |
+| `playbook_base_ids` | string[] | Playbook filter used |
+
+### TrendingTopic fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Topic name (2-4 words) |
+| `description` | string | Topic description |
+| `insight` | string | Detailed analysis |
+| `example_question` | string | Representative question |
+| `conversation_count` | int | Number of conversations |
+| `percentage` | float | % of total conversations |
+| `sentiment` | string | Dominant sentiment |
+| `sentiment_breakdown` | object | `{positive, neutral, negative}` counts |
+| `handoff_count` | int | Number of handoffs |
+| `handoff_rate` | float | Handoff percentage |
+| `conversation_ids` | string[] | Conversation IDs in topic |
+| `example_conversations` | array | Up to 4 example conversations |
+
+---
+
 ## KB Item Metadata
 
 `GET /knowledgebases/{kb_id}/items/{item_id}`
