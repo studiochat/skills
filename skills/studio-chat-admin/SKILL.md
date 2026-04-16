@@ -350,6 +350,193 @@ The referenced tools/KBs are registered in the agent even before the skill is lo
 
 ---
 
+## Example Blocks
+
+Example blocks are reference conversations that show the assistant HOW to communicate — tone, style, personality, containment strategies, and approach. They are inline in the instructions or skills via `{{ examples: BLOCK_ID }}` template macros.
+
+When compiled, examples are injected into the prompt as `<example id="xxxxx">` tags. The LLM is instructed to follow the style of matching examples and reference them in its response with `<<example_id>>` markers.
+
+### How examples work
+
+1. **Create an example block** — a block holds one or more reference conversations
+2. **Reference it in instructions or skills** — using `{{ examples: BLOCK_ID }}`
+3. **At runtime** — the assistant sees the examples, adopts the style, and cites which example it followed
+
+Example blocks are **immutable** — editing creates a new block (new ID), and saving the playbook creates a new version pointing to the new block. Previous versions retain their original examples for rollback.
+
+### Create example block
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -X POST "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks" \
+  -d '{
+    "examples": [
+      {
+        "turns": [
+          {"role": "user", "content": "Hola, necesito ayuda"},
+          {"role": "assistant", "content": "¡Hola! Entiendo que necesitás ayuda. Estoy acá para vos. ¿En qué te puedo ayudar?"}
+        ]
+      },
+      {
+        "turns": [
+          {"role": "user", "content": "Me cobraron de más"},
+          {"role": "assistant", "content": "Lamento mucho eso. Voy a revisar tu caso ahora mismo. ¿Me pasás tu número de cuenta para verificar?"}
+        ]
+      }
+    ]
+  }'
+```
+
+Returns the block with its `id`. Use this ID in the `{{ examples: BLOCK_ID }}` macro.
+
+### List example blocks
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks"
+```
+
+### Get example block
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks/BLOCK_ID"
+```
+
+### Update example block
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks/BLOCK_ID" \
+  -H "Content-Type: application/json" \
+  -X PATCH -d '{
+    "examples": [
+      {
+        "turns": [
+          {"role": "user", "content": "Updated user message"},
+          {"role": "assistant", "content": "Updated assistant response"}
+        ]
+      }
+    ]
+  }'
+```
+
+### Delete example block
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks/BLOCK_ID" -X DELETE
+```
+
+### Using examples in instructions
+
+Add `{{ examples: BLOCK_ID }}` anywhere in the playbook instructions:
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -X PATCH "$API_BASE/playbooks/BASE_ID/latest" \
+  -d '{
+    "content": "Sos el asistente de Acme Corp.\n\nSeguí el estilo de estos ejemplos:\n{{ examples: BLOCK_ID }}\n\nConsultá {{ kb(KB_ID) }} para responder consultas."
+  }'
+```
+
+### Using examples in skills
+
+Same syntax works inside skill content:
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -X POST "$API_BASE/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills" \
+  -d '{
+    "name": "reclamos",
+    "description": "Manejar reclamos de clientes",
+    "trigger": "Manejar reclamos de clientes",
+    "content": "## Manejo de reclamos\n\n1. Validar la emoción del cliente\n2. Pedir datos del caso\n3. Ofrecer solución\n\n{{ examples: BLOCK_ID }}",
+    "is_active": true,
+    "order": 0
+  }'
+```
+
+### Workflow: Import style from a human agent
+
+This is the most powerful use case — take the best CX agent's conversations and replicate their style in the AI assistant.
+
+**Step 1**: Identify the best conversations (e.g., from Intercom, or from Studio Chat's own chat log)
+
+**Step 2**: Create example blocks with those conversations, anonymizing user data:
+
+```bash
+# Example: the best agent's greeting style
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -X POST "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks" \
+  -d '{
+    "examples": [
+      {
+        "turns": [
+          {"role": "user", "content": "Hola"},
+          {"role": "assistant", "content": "¡Hola! Bienvenido/a a Acme Corp. Soy tu asistente virtual. ¿En qué te puedo ayudar hoy?"}
+        ]
+      }
+    ]
+  }'
+
+# Example: how the best agent handles complaints
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -X POST "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks" \
+  -d '{
+    "examples": [
+      {
+        "turns": [
+          {"role": "user", "content": "Me robaron, me cobraron doble"},
+          {"role": "assistant", "content": "Entiendo tu frustración y lamento mucho lo que pasó. Vamos a revisar tu caso ahora mismo para solucionarlo lo antes posible. ¿Me podrías pasar tu número de cuenta o el ID de la transacción?"}
+        ]
+      }
+    ]
+  }'
+```
+
+**Step 3**: Reference the blocks in the assistant's instructions and skills:
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -X PATCH "$API_BASE/playbooks/BASE_ID/latest" \
+  -d '{
+    "content": "Sos el asistente de Acme Corp.\n\n{{ examples: GREETING_BLOCK_ID }}\n\nConsultá la base de conocimiento para responder."
+  }'
+```
+
+**Step 4**: For specific scenarios (complaints, refunds), add examples to the corresponding skill:
+
+```bash
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -X PATCH "$API_BASE/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/reclamos" \
+  -d '{"content": "## Reclamos\n\nManejar con empatía.\n\n{{ examples: COMPLAINTS_BLOCK_ID }}"}'
+```
+
+The assistant will now adopt the style of your best human agent for each scenario.
+
+### Data placeholder syntax
+
+In example conversations, use `#` to mark where dynamic data should go. The assistant understands these are placeholders to be filled with real data:
+
+```json
+{
+  "turns": [
+    {"role": "user", "content": "¿Cuándo llega mi pedido?"},
+    {"role": "assistant", "content": "Tu pedido está en estado # y se estima que llegue en # días hábiles."}
+  ]
+}
+```
+
+---
+
 ## API Tools
 
 Custom HTTP integrations the assistant can call during conversations.
