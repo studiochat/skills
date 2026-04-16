@@ -79,9 +79,9 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /projects/{pid}/conversations` | Paginated list with all metadata inline: summary, user_intent, sentiment (label+reason), resources (label+reason), sentiment_shift, deflection_quality, handoff_reason, recontact_risk (each with label+reason), skills, tags, handoff, message_count, latency, model. Filters: playbook, date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting |
+| `GET /projects/{pid}/conversations` | Paginated list with all metadata inline: summary, user_intent, sentiment (label+reason), resources (label+reason), sentiment_shift, deflection_quality, handoff_reason, recontact_risk (each with label+reason), skills, tags, handoff, message_count, latency, model, **playbooks_info** (all participating playbooks). Filters: playbook (matches any participant, not just last active), date, handoff, tags, winback, inbox, search, sentiment, resources, message count, sorting |
 | `GET /projects/{pid}/conversations/summaries` | Lightweight summaries for batch scanning: summary, sentiment, resources, user_intent, sentiment_shift, deflection_quality, handoff_reason, recontact_risk, tags, has_handoff, message_count, skills |
-| `GET /projects/{pid}/conversations/{cid}` | **Full detail**: all metadata + complete message history with per-message token usage/cost + tool calls + citations |
+| `GET /projects/{pid}/conversations/{cid}` | **Full detail**: all metadata + complete message history with per-message token usage/cost + tool calls + citations. Each assistant message includes `playbook_id`, `playbook_name`, `playbook_version` in metadata (for multi-playbook conversations) |
 | `POST /projects/{pid}/conversations/batch` | **Batch detail**: same as above for up to 50 conversations in a single request. Body: `{"conversation_ids": [...]}` |
 | `GET /projects/{pid}/conversations/{cid}/messages` | Message history + citations (without metadata — prefer the detail endpoint above) |
 | `GET /projects/{pid}/conversations/{cid}/metrics` | Sentiment, resource quality, summary for one conversation |

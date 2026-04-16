@@ -48,8 +48,8 @@ Aggregated conversation metrics with time series and breakdowns by playbook/tag.
 |-------|------|----------|-------------|
 | `start_date` | string | Yes | ISO 8601 datetime (e.g., `2025-01-01T00:00:00Z`) |
 | `end_date` | string | Yes | ISO 8601 datetime |
-| `playbook_id` | string | No | Filter by specific playbook version UUID |
-| `playbook_base_ids` | string | No | Comma-separated playbook base UUIDs (all versions) |
+| `playbook_id` | string | No | Filter by playbook version UUID (matches any participating playbook) |
+| `playbook_base_ids` | string | No | Comma-separated playbook base UUIDs (matches conversations where any version participated) |
 | `tags` | string | No | Comma-separated tags (AND logic — must match ALL) |
 
 **Response fields:**
@@ -120,8 +120,8 @@ Sentiment and resource-quality distributions across scored conversations.
 |-------|------|----------|-------------|
 | `start_date` | string | Yes | ISO 8601 datetime |
 | `end_date` | string | Yes | ISO 8601 datetime |
-| `playbook_id` | string | No | Filter by playbook version UUID |
-| `playbook_base_id` | string | No | Filter by playbook base UUID |
+| `playbook_id` | string | No | Filter by playbook version UUID (matches any participating playbook) |
+| `playbook_base_id` | string | No | Filter by playbook base UUID (matches any participating version) |
 | `tags` | string | No | Comma-separated tags (AND logic) |
 | `inbox_id` | string | No | Filter by inbox UUID |
 
@@ -155,8 +155,8 @@ Paginated list of customer conversations with comprehensive filtering.
 | `offset` | int | 0 | Skip N conversations |
 | `start_date` | string | | ISO 8601 start datetime |
 | `end_date` | string | | ISO 8601 end datetime |
-| `playbook_id` | string | | Filter by playbook version UUID |
-| `playbook_base_id` | string | | Filter by playbook base UUID (all versions) |
+| `playbook_id` | string | | Filter by playbook version UUID (matches any participating playbook, not just the last active) |
+| `playbook_base_id` | string | | Filter by playbook base UUID — matches conversations where any version of this playbook participated |
 | `inbox_id` | string | | Filter by inbox UUID |
 | `search` | string | | Search by conversation ID |
 | `has_handoff` | bool | | `true` = only escalated, `false` = only AI-resolved |
@@ -181,8 +181,9 @@ All metadata is returned inline — no separate enrichment calls needed.
 ```
 conversation_id             string  Unique conversation identifier
 inbox_name                  string  Channel name (e.g., "Website Chat")
-playbook_name               string  Playbook that handled this conversation
-playbook_version            int     Version number of the playbook
+playbook_name               string  Last active playbook name
+playbook_version            int     Last active playbook version number
+playbooks_info              array   All playbooks that participated [{id, name, version}]
 message_count               int     Total messages in conversation
 first_message_at            string  ISO 8601 timestamp of first message
 last_message_at             string  ISO 8601 timestamp of last message
@@ -281,7 +282,7 @@ messages                    array   Complete message history
   role                      string  "user" or "assistant"
   content                   string  Message text content
   created_at                string  ISO 8601 timestamp
-  metadata                  object  Labels, priority, notes, handoff, explanation, latency
+  metadata                  object  Includes: playbook_id, playbook_name, playbook_version (which playbook generated this message), response_latency_ms, labels, priority, notes, handoff, explanation
   tool_calls                array   Tool calls in this message
     id                      string  Tool call ID
     name                    string  Tool name (e.g., "search_knowledge_base")
