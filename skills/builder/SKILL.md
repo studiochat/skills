@@ -1,15 +1,14 @@
 ---
-name: studio-chat-admin
+name: builder
 description: >
-  Manage Studio Chat project configuration — knowledge bases, playbooks, syncing, schedule,
-  API tools, alerts, and trending topics. Use when asked to create, update, delete, or inspect
-  KBs, playbooks, office hours, alerts, or any project settings. Also use to generate and browse
-  trending topics analyses. Covers all CRUD operations via the Studio Chat API.
+  Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
+  API tools, alerts, schedules, and trending topics. Use when asked to create, update, or manage
+  any aspect of an assistant's configuration. Covers all CRUD operations via the Studio Chat API.
 ---
 
-# Studio Chat Admin
+# Builder
 
-Read and write Studio Chat project configuration using the API. All calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
+Build and configure Studio Chat assistants using the API. All calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
 **IMPORTANT: Always confirm before creating or modifying.** Never create knowledge bases,
 playbooks, API tools, or trigger syncing without explicit user confirmation. Show what
