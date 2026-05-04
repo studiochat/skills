@@ -110,6 +110,17 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 | `GET /projects/{pid}/analytics/kbs/sparklines` | Lightweight per-KB daily citation counts for sparklines (trailing N days) |
 | `GET /projects/{pid}/analytics/kbs/{kb_id}/items` | Per-item citation traffic for a specific KB: item_id, count, sorted by most-cited. Use to find top FAQ/article/snippet items |
 
+### Customer Outcomes (CSAT & Conversion)
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /projects/{pid}/csat/analytics` | CSAT dashboard: KPIs (CSAT/DSAT %, response rate), 1–5 rating distribution, time series, paginated ratings table with remarks. Sourced from Intercom CSAT enrichment. Filters: date range, tags, `tag_filter`, `playbook_base_id`, `max_rating` (drill-down on the table only) |
+| `GET /projects/{pid}/conversion-metrics` | List all custom conversion metric definitions for a project (id, slug, name, value_label, enabled, last_event_at). Read-only — definitions are managed from the FE Enrichments view |
+| `GET /projects/{pid}/conversion-metrics/{slug}` | Get a single definition + last_event_at (heartbeat) |
+| `GET /projects/{pid}/conversion-metrics/{slug}/analytics` | Per-metric dashboard: total_events, total_value, avg_value, converting_conversations, eligible_conversations, conversion_rate_pct, time series, paginated events table. Filters: date range, tags, `tag_filter`, `playbook_base_id` |
+
+> Definitions and event ingest are intentionally not exposed here — they are managed from the FE / external ingest service.
+
 ### Configuration Context
 
 | Endpoint | Returns |
@@ -411,6 +422,124 @@ python3 scripts/fetch.py \
   -o skill_errors.json
 ```
 
+### 10. CSAT Analytics
+
+CSAT is sourced from the Intercom CSAT enrichment. If the project has no config yet,
+the response is `{"is_configured": false, ...}` with empty/zeroed fields — surface this
+to the user as "CSAT is not configured for this project" instead of reporting 0%.
+
+Defaults: when `start_date` / `end_date` are omitted the window is the last 7 days
+ending now. Always pass the dates explicitly so the report's window is reproducible.
+
+```bash
+# CSAT dashboard payload — KPIs, distribution, time series, ratings table
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/csat/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+  -o csat.json
+
+# Filter to one assistant (all versions)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/csat/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+    playbook_base_id=PLAYBOOK_BASE_UUID \
+  -o csat_assistant.json
+
+# Filter by tags (AND logic)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/csat/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+    tags=billing,refund \
+  -o csat_billing_refund.json
+
+# Drill-down: only show 1–2 ★ ratings in the table (KPIs/time series stay unfiltered)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/csat/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+    max_rating=2 ratings_limit=50 \
+  -o csat_dsat_table.json
+
+# Page through the ratings table
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/csat/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+    ratings_limit=50 ratings_offset=50 \
+  -o csat_page2.json
+```
+
+Key fields:
+
+| Field | Meaning |
+|-------|---------|
+| `is_configured` | False when the project has no Intercom CSAT config — short-circuit the rest |
+| `total_rated` | Number of conversations with a CSAT rating in the window |
+| `csat_score_pct` | % of rated convos with rating in {4, 5} |
+| `dsat_score_pct` | % of rated convos with rating in {1, 2} |
+| `eligible_deflected` | Deflected conversations in window — denominator for `response_rate_pct` |
+| `response_rate_pct` | % of eligible convos that were rated |
+| `rating_distribution` | Map of `"1"…"5"` → count |
+| `time_series[].csat_pct` | Per-bucket CSAT % (null when empty) |
+| `time_series[].response_rate_pct` | Per-bucket response rate (null when `eligible=0`) |
+| `ratings[]` | Paginated rows: `conversation_id`, `rating`, `remark`, `rated_at`, `tags`, `first_message_at` |
+
+### 11. Conversion Metrics
+
+Custom conversion metrics track external conversion events (e.g. sales) tied to a
+conversation. Definitions and event ingest live in the FE / an upstream cron — from
+the data-expert skill we only **read** them and pull analytics.
+
+```bash
+# List all custom conversion metrics for the project
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversion-metrics" \
+  -o conversion_metrics.json
+
+# Get a single definition (find its slug from the list above)
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversion-metrics/SLUG" \
+  -o metric_def.json
+
+# Per-metric analytics dashboard for a date range
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversion-metrics/SLUG/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+  -o metric_analytics.json
+
+# Filter to one assistant
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversion-metrics/SLUG/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+    playbook_base_id=PLAYBOOK_BASE_UUID \
+  -o metric_assistant.json
+
+# Page through the events table for a metric
+python3 scripts/fetch.py \
+  "/projects/$STUDIO_PROJECT_ID/conversion-metrics/SLUG/analytics" \
+  --params start_date=2026-04-01T00:00:00Z end_date=2026-05-01T00:00:00Z \
+    events_limit=100 events_offset=0 \
+  -o metric_events.json
+```
+
+Key fields:
+
+| Field | Meaning |
+|-------|---------|
+| `is_configured` | False when no metric with that slug exists — short-circuit the rest |
+| `definition` | Echo of the metric definition (`name`, `slug`, `value_label`, `enabled`, `last_event_at`) |
+| `total_events` | Total ingested events in the window |
+| `total_value` | Sum of `value` across events (use `definition.value_label` for the unit, e.g. USD) |
+| `avg_value` | Mean event value |
+| `converting_conversations` | Distinct conversations with at least one event in window |
+| `eligible_conversations` | Deflected conversations with `last_message_at` in window — denominator for `conversion_rate_pct` |
+| `conversion_rate_pct` | `converting_conversations / eligible_conversations × 100` |
+| `avg_value_per_conversation` | `total_value / converting_conversations` |
+| `time_series[]` | `{date, event_count, total_value, converting_conversations}` per bucket |
+| `events[]` | Paginated table rows: `conversation_id`, `value`, `occurred_at`, `metadata`, `tags` |
+
+The `last_event_at` timestamp on the definition is the integration heartbeat — if it's
+hours/days old when the upstream cron is supposed to run more often, flag it as a
+likely broken ingest pipeline rather than reporting "0 conversions".
+
 ---
 
 ## Analysis Recipes
@@ -708,6 +837,148 @@ high_risk = [c for c in convs if c.get("recontact_risk") == "high"]
 print(f"\nHigh recontact risk: {len(high_risk)}")
 for c in high_risk[:5]:
     print(f"  [{c['conversation_id']}] {c.get('user_intent', 'no intent')}: {c.get('recontact_risk_reason', '')[:80]}")
+```
+
+### CSAT Score & Distribution
+
+```python
+import json
+
+with open("csat.json") as f:
+    csat = json.load(f)
+
+if not csat["is_configured"]:
+    print("CSAT is not configured for this project — skipping.")
+else:
+    print(f"Rated conversations: {csat['total_rated']}")
+    print(f"CSAT (4–5 ★): {csat['csat_score_pct']:.1f}%")
+    print(f"DSAT (1–2 ★): {csat['dsat_score_pct']:.1f}%")
+    print(f"Response rate: {csat['response_rate_pct']:.1f}% "
+          f"({csat['total_rated']}/{csat['eligible_deflected']} eligible)")
+
+    print("\nRating distribution:")
+    dist = csat["rating_distribution"]
+    for r in ["5", "4", "3", "2", "1"]:
+        count = dist.get(r, 0)
+        pct = (count / csat["total_rated"] * 100) if csat["total_rated"] else 0
+        bar = "█" * int(pct / 2)
+        print(f"  {r}★: {count:>4} ({pct:5.1f}%) {bar}")
+
+    # Daily CSAT trend
+    print("\nDaily CSAT % (skipping empty buckets):")
+    for pt in csat["time_series"]:
+        if pt["csat_pct"] is None:
+            continue
+        print(f"  {pt['date']}: {pt['csat_pct']:5.1f}% over {pt['total']} ratings")
+```
+
+### DSAT Drill-Down (low-rating remarks)
+
+When CSAT looks bad, the cheapest explanation usually lives in the verbatim remarks
+attached to 1–2 ★ ratings. Pull them with `max_rating=2` and group by tag.
+
+```python
+import json
+from collections import Counter
+
+with open("csat_dsat_table.json") as f:
+    csat = json.load(f)
+
+ratings = csat["ratings"]
+print(f"Showing {len(ratings)} of {csat['total_rated']} low-rating reviews\n")
+
+tag_counts = Counter()
+for r in ratings:
+    for t in r.get("tags") or []:
+        tag_counts[t] += 1
+
+print("Top tags among 1–2★ ratings:")
+for tag, count in tag_counts.most_common(10):
+    print(f"  {tag}: {count}")
+
+print("\nRecent verbatims (with remark):")
+for r in ratings[:15]:
+    if not r.get("remark"):
+        continue
+    print(f"  [{r['conversation_id']}] {r['rating']}★: {r['remark'][:140]}")
+```
+
+### Conversion Metric — Topline + Trend
+
+```python
+import json
+
+with open("metric_analytics.json") as f:
+    m = json.load(f)
+
+if not m["is_configured"]:
+    print("Metric not found — check the slug.")
+else:
+    defn = m["definition"]
+    unit = defn["value_label"]
+    print(f"Metric: {defn['name']} (slug={defn['slug']})")
+    if defn.get("last_event_at"):
+        print(f"Last event ingested: {defn['last_event_at']}")
+
+    print(f"\nEvents: {m['total_events']}")
+    print(f"Total value: {m['total_value']:.2f} {unit}")
+    print(f"Avg value: {m['avg_value']:.2f} {unit}")
+    print(f"Converting conversations: {m['converting_conversations']}")
+    print(f"Eligible (deflected) conversations: {m['eligible_conversations']}")
+    print(f"Conversion rate: {m['conversion_rate_pct']:.2f}%")
+    print(f"Avg value per converting convo: {m['avg_value_per_conversation']:.2f} {unit}")
+
+    print("\nDaily trend:")
+    for pt in m["time_series"]:
+        print(f"  {pt['date']}: {pt['event_count']} events, "
+              f"{pt['total_value']:.2f} {unit}, "
+              f"{pt['converting_conversations']} convos")
+```
+
+### Conversion Funnel by Assistant
+
+To compare conversion across assistants, fetch the per-metric analytics once per
+`playbook_base_id` and tabulate the rates side-by-side. The list of bases comes
+from `GET /projects/{pid}/playbooks`.
+
+```python
+import json
+import subprocess
+
+with open("playbooks.json") as f:
+    playbooks = json.load(f)
+
+bases = {pb["base_id"]: pb["name"] for pb in playbooks}
+
+rows = []
+for base_id, name in bases.items():
+    out = f"metric_{base_id}.json"
+    subprocess.run([
+        "python3", "scripts/fetch.py",
+        f"/projects/{__import__('os').environ['STUDIO_PROJECT_ID']}/conversion-metrics/SLUG/analytics",
+        "--params",
+        "start_date=2026-04-01T00:00:00Z",
+        "end_date=2026-05-01T00:00:00Z",
+        f"playbook_base_id={base_id}",
+        "-o", out,
+    ], check=True)
+    with open(out) as f:
+        m = json.load(f)
+    if not m["is_configured"]:
+        continue
+    rows.append({
+        "assistant": name,
+        "eligible": m["eligible_conversations"],
+        "converting": m["converting_conversations"],
+        "rate": m["conversion_rate_pct"],
+        "value": m["total_value"],
+    })
+
+rows.sort(key=lambda r: r["rate"], reverse=True)
+print(f"{'Assistant':<30} {'Eligible':>10} {'Convert':>10} {'Rate':>8} {'Value':>12}")
+for r in rows:
+    print(f"{r['assistant']:<30} {r['eligible']:>10} {r['converting']:>10} "
+          f"{r['rate']:>7.2f}% {r['value']:>12.2f}")
 ```
 
 ---
