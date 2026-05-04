@@ -31,6 +31,8 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [Resource Analytics — API Tool Usage](#resource-analytics--api-tool-usage)
 - [Resource Analytics — Toolkit Usage](#resource-analytics--toolkit-usage)
 - [Resource Analytics — Skill Usage](#resource-analytics--skill-usage)
+- [CSAT Analytics](#csat-analytics)
+- [Conversion Metrics](#conversion-metrics)
 - [Custom Toolkits Reference](#custom-toolkits-reference)
 - [Analyst Conversations](#analyst-conversations)
 
@@ -955,6 +957,177 @@ Lightweight per-skill daily counts for sparkline charts.
     date                    string  YYYY-MM-DD
     count                   int     Loads that day
 ```
+
+---
+
+## CSAT Analytics
+
+`GET /projects/{pid}/csat/analytics`
+
+Aggregate CSAT for a project: KPIs, 1–5 distribution, time series, and a paginated
+ratings table. Sourced from the Intercom CSAT enrichment — projects without an
+enrichment config respond with `is_configured=false` and zeroed fields.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `start_date` | string | now − 7d | ISO 8601 datetime (UTC if no offset) |
+| `end_date` | string | now | ISO 8601 datetime |
+| `tags` | string | — | Comma-separated tags (AND logic) |
+| `tag_filter` | string | — | JSON-encoded TagExpr (AND/OR/NOT). Takes precedence over `tags` when set |
+| `playbook_base_id` | string | — | Filter to one assistant (all versions) |
+| `ratings_limit` | int | 10 | Page size for the ratings table (1–200) |
+| `ratings_offset` | int | 0 | Pagination offset into `total_rated` |
+| `max_rating` | int | — | Drill-down: only return ratings ≤ this value (1–5) in the table. KPIs, distribution, and time series stay on the unfiltered dataset |
+
+**Response fields:**
+
+```
+is_configured           bool    False when no Intercom CSAT config exists for the project
+total_rated             int     Conversations with a rating in the window
+csat_score_pct          float   % of rated convos with rating in {4, 5}
+dsat_score_pct          float   % of rated convos with rating in {1, 2}
+eligible_deflected      int     Deflected conversations in window (denominator for response_rate_pct)
+response_rate_pct       float   % of eligible convos that were rated
+rating_distribution     dict    Map of "1"…"5" → count
+positive_count          int     Convos with rating in {4, 5}
+neutral_count           int     Convos with rating == 3
+negative_count          int     Convos with rating in {1, 2}
+time_series             array   Per-bucket CSAT — see below
+time_granularity        string  "day" or "hour"
+ratings                 array   Paginated rows for the ratings table
+ratings_offset          int     Echo of the offset the page starts at
+```
+
+Each `time_series` entry:
+
+```
+date                  string  Bucket label (ISO date or ISO hour)
+total                 int     Ratings received in the bucket
+positive              int     Ratings in {4, 5}
+neutral               int     Ratings == 3
+negative              int     Ratings in {1, 2}
+csat_pct              float?  % positive of total (null when total=0)
+eligible              int     Eligible deflected convos in the bucket
+response_rate_pct     float?  % of eligible that were rated (null when eligible=0)
+```
+
+Each `ratings` row:
+
+```
+conversation_id       string  External platform conversation id (links to the detail view)
+rating                int     1..5
+remark                string? Verbatim left by the rater (often null)
+rated_at              datetime?
+tags                  array   Conversation tags
+first_message_at      datetime?
+```
+
+**Errors:** `400` on invalid `start_date`/`end_date` ordering or malformed
+`tag_filter`. `404` when the project does not exist for the caller's account.
+
+---
+
+## Conversion Metrics
+
+Per-project, user-defined enrichments that track external conversion events
+(e.g. sales) tied to a conversation. Definitions are managed from the FE; events
+are pushed in by an external service. The data-expert skill is **read-only** —
+the create/update/delete and ingest endpoints are not exposed here.
+
+### List Conversion Metrics
+
+`GET /projects/{pid}/conversion-metrics`
+
+Returns all definitions for a project, ordered by `created_at` ascending.
+
+Each item:
+
+```
+id                    string   UUID
+project_id            string
+slug                  string   Per-project unique, lowercase + hyphens
+name                  string   Human label (e.g. "Venta")
+description           string?
+value_label           string   Unit rendered alongside `value` (e.g. "USD", "ARS")
+enabled               bool     False = ingest rejected with 409
+created_at            datetime
+updated_at            datetime
+ingest_url_path       string   Relative POST path the upstream cron uses
+last_event_at         datetime? MAX(events.created_at) — integration heartbeat
+```
+
+### Get Conversion Metric
+
+`GET /projects/{pid}/conversion-metrics/{slug}`
+
+Same shape as one item from the list endpoint. Responds `404` when the slug
+doesn't exist for the project.
+
+### Conversion Metric Analytics
+
+`GET /projects/{pid}/conversion-metrics/{slug}/analytics`
+
+Dashboard payload for one metric. Mirrors the structure of `csat/analytics` —
+KPIs + time series + paginated events table.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `start_date` | string | now − 7d | ISO 8601 datetime |
+| `end_date` | string | now | ISO 8601 datetime |
+| `tags` | string | — | Comma-separated tags (AND logic) |
+| `tag_filter` | string | — | JSON-encoded TagExpr (AND/OR/NOT). Takes precedence over `tags` |
+| `playbook_base_id` | string | — | Filter to one assistant (all versions) |
+| `events_limit` | int | 25 | Page size for the events table (1–200) |
+| `events_offset` | int | 0 | Pagination offset into `total_events_filtered` |
+
+**Response fields:**
+
+```
+is_configured                 bool    False when no metric with that slug exists for the project
+definition                    object  Echo of the metric definition (see list response)
+total_events                  int     Events in window matching filters
+total_value                   float   Sum of event.value (use definition.value_label for the unit)
+avg_value                     float   total_value / total_events (0 when total_events=0)
+converting_conversations      int     Distinct conversations with ≥1 event in window
+eligible_conversations        int     Deflected conversations in window — denominator for conversion_rate_pct
+conversion_rate_pct           float   converting_conversations / eligible_conversations × 100
+avg_value_per_conversation    float   total_value / converting_conversations
+time_granularity              string  "day" or "hour"
+time_series                   array   Per-bucket trend — see below
+events                        array   Paginated rows for the events table
+events_offset                 int     Echo of the offset the page starts at
+total_events_filtered         int     Total rows matching the filters (denominator for paging)
+```
+
+Each `time_series` entry:
+
+```
+date                       string  Bucket label
+event_count                int     Events in the bucket
+total_value                float   Sum of values in the bucket
+converting_conversations   int     Distinct conversations with ≥1 event in the bucket
+```
+
+Each `events` row:
+
+```
+id                  int      Internal event id
+conversation_id     string   External platform conversation id (always set — ingest rejects unmatched)
+match_value         string   Original platform id used at ingest
+idempotency_key     string   Caller-supplied stable key for the underlying event
+value               float    Numeric value
+occurred_at         datetime When the event happened (UTC)
+metadata            dict?    Free-form JSON the cron attached at ingest
+tags                array    Conversation tags
+```
+
+**Errors:** `400` on invalid date ordering or malformed `tag_filter`. When the
+slug doesn't exist the response is `200` with `is_configured=false` (so the FE
+can render its empty state) — check that flag before reading any other field.
 
 ---
 
