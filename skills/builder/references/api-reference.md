@@ -469,6 +469,200 @@ Returns: `AlertRun`
 
 ---
 
+## Monitors
+
+Aggregate-style triggers (count of conversations matching a filter) evaluated on a cron
+schedule. Read endpoints, mutations, preview, and test all accept `sbs_` keys directly.
+Delete needs a human reviewer — `sbs_` callers get a **202** with an approval id.
+
+### Preview Monitor
+`POST /projects/{pid}/monitors/preview`
+
+Live count for the form — 7 daily buckets + the lookback total.
+
+```json
+{
+  "filter": {/* ConversationFilter or null */},
+  "window_basis": "last_message | first_message",
+  "playbook_base_id": "string (optional)",
+  "window_minutes": "int (1..1440, required)"
+}
+```
+
+Returns:
+
+```json
+{
+  "daily_buckets": [{"bucket_start": "datetime", "count": 0}],
+  "window_count": 0
+}
+```
+
+### List Monitors
+`GET /projects/{pid}/monitors`
+
+Returns: `{items: [MonitorDefinition], total: int}`. Each item carries `last_run_at`,
+`last_triggered_at`, and `recent_runs` (up to 24 sparkline points).
+
+### Create Monitor
+`POST /projects/{pid}/monitors`
+
+```json
+{
+  "name": "string (required, ≤255)",
+  "filter": {/* ConversationFilter or null */},
+  "window_basis": "last_message (default) | first_message",
+  "playbook_base_id": "string (required, ≤36)",
+  "cron_expression": "string (default '*/10 * * * *', min 10-min interval)",
+  "window_minutes": "int (1..1440, required)",
+  "comparison_kind": "absolute (default) | baseline_relative",
+  "threshold": "float (>0, required)",
+  "baseline_hours": "int (1..168, required when baseline_relative)",
+  "slack_channel": "string (optional)",
+  "email_recipients": ["string (optional)"]
+}
+```
+
+Returns: `MonitorDefinition` (201).
+
+### Get Monitor
+`GET /monitors/{monitor_id}`
+
+Returns: `MonitorDefinition` with `last_run_at`, `last_triggered_at`, `recent_runs`.
+
+### Update Monitor
+`PATCH /monitors/{monitor_id}`
+
+All fields optional:
+
+```json
+{
+  "name": "string",
+  "filter": {/* ConversationFilter — pass empty group to clear */},
+  "window_basis": "last_message | first_message",
+  "project_id": "string (re-parent — only meaningful with playbook_base_id)",
+  "playbook_base_id": "string",
+  "cron_expression": "string",
+  "window_minutes": "int",
+  "comparison_kind": "absolute | baseline_relative",
+  "threshold": "float",
+  "baseline_hours": "int",
+  "slack_channel": "string",
+  "email_recipients": ["string"],
+  "is_enabled": "bool"
+}
+```
+
+### Duplicate Monitor
+`POST /monitors/{monitor_id}/duplicate`
+
+Creates a disabled clone named `copy-{original.name}` under the same account. Returns:
+`MonitorDefinition` (201).
+
+### Delete Monitor
+`DELETE /monitors/{monitor_id}` — 204 on success.
+
+For sandbox (`sbs_`) callers the request is queued for human approval and returns:
+
+```json
+{
+  "approval_id": "uuid",
+  "status": "pending",
+  "description": "Delete monitor {monitor_id}",
+  "message": "Request queued for admin approval."
+}
+```
+(HTTP 202.)
+
+### Test Run Monitor
+`POST /monitors/{monitor_id}/test`
+
+Inline evaluation. Persists a `MonitorRun` and fires Slack/email if the rule triggers
+(marked as a TEST run). Returns: `MonitorRun` (200).
+
+### List Monitor Runs
+`GET /monitors/{monitor_id}/runs`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | int | 50 | Results per page |
+| `offset` | int | 0 | Skip N results |
+
+Returns: `{items: [MonitorRun], total: int}` (newest first).
+
+### Get Monitor Run
+`GET /monitors/runs/{run_id}`
+
+Returns: `MonitorRun`.
+
+### Conversation filter shape
+
+The `filter` field is a compound AST. Three leaf types, all accept `negate: true`:
+
+```jsonc
+// Tag leaf
+{ "type": "tag",     "value": "billing", "negate": false }
+
+// Skill leaf — matches if the named skill was successfully invoked in the conversation
+{ "type": "skill",   "value": "refund-process" }
+
+// Handoff leaf — value is a bool
+{ "type": "handoff", "value": true }
+
+// Group — combines children with AND or OR (max depth 6, max 64 nodes)
+{ "type": "group", "op": "and", "children": [/* leaves or nested groups */] }
+```
+
+`null` (or an empty group) matches every conversation in the window.
+
+### MonitorDefinition fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Monitor ID |
+| `project_id` | UUID | Project ID |
+| `account_id` | UUID | Owning account |
+| `name` | string | Display name |
+| `filter` | object \| null | Conversation filter AST |
+| `window_basis` | enum | `last_message` or `first_message` |
+| `playbook_base_id` | UUID \| null | Assistant scope (version-stable) |
+| `cron_expression` | string | Cron schedule |
+| `window_minutes` | int | Lookback window in minutes |
+| `comparison_kind` | enum | `absolute` or `baseline_relative` |
+| `threshold` | float | Absolute count or baseline multiplier |
+| `baseline_hours` | int \| null | Anchor for baseline-relative comparison |
+| `slack_channel` | string \| null | Slack channel name |
+| `email_recipients` | string[] \| null | Email addresses |
+| `is_enabled` | bool | Whether the cron worker picks it up |
+| `created_at` | datetime | Created timestamp |
+| `updated_at` | datetime | Updated timestamp |
+| `last_run_at` | datetime \| null | Most recent run |
+| `last_triggered_at` | datetime \| null | Most recent triggered run |
+| `recent_runs` | array | Up to 24 sparkline points (chronological) |
+
+### MonitorRun fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Run ID |
+| `monitor_id` | UUID | Parent monitor |
+| `project_id` | UUID | Project ID |
+| `account_id` | UUID | Owning account |
+| `status` | enum | `pending`, `running`, `completed`, `failed` |
+| `triggered` | bool \| null | Whether the rule fired |
+| `current_value` | float \| null | The count over the lookback window |
+| `threshold_value` | float \| null | The numeric threshold the count was compared to |
+| `baseline_value` | float \| null | The baseline count (only for `baseline_relative`) |
+| `summary` | string \| null | Human-readable result |
+| `window_start` | datetime \| null | Lookback window start |
+| `window_end` | datetime \| null | Lookback window end |
+| `error_message` | string \| null | Error details (on failure) |
+| `started_at` | datetime \| null | Execution start time |
+| `completed_at` | datetime \| null | Execution end time |
+| `created_at` | datetime | Created timestamp |
+
+---
+
 ## Trending Topics
 
 ### Generate Analysis
