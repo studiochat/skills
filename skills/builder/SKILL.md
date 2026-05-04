@@ -684,6 +684,207 @@ python3 scripts/api.py "/alerts/runs/RUN_ID"
 
 ---
 
+## Monitors
+
+Monitors are **aggregate** triggers (Datadog-style) — a SQL count of conversations matching
+a structured filter, evaluated on a cron schedule. When the count crosses the threshold the
+monitor fires and ships a notification to Slack and/or email.
+
+Use **monitors** when the question is "how many?" (e.g. _more than 50 handoffs in the last
+hour_). Use **alerts** when the question is "is the bot misbehaving?" — alerts run a
+natural-language check via the data-expert skill, monitors don't read messages at all.
+
+Like alerts, the cron has a **10-minute minimum interval**.
+
+### Filter shape
+
+The filter is a compound AST over three leaf types — same shape used by other parts of the
+platform. All leaves accept `negate: true`, and `group` accepts `op: "and"` or `op: "or"`.
+
+```jsonc
+// "tag billing AND skill refund AND NOT has_handoff"
+{
+  "type": "group",
+  "op": "and",
+  "children": [
+    { "type": "tag",     "value": "billing" },
+    { "type": "skill",   "value": "refund-process" },
+    { "type": "handoff", "value": true, "negate": true }
+  ]
+}
+```
+
+Pass `null` (or omit the field) to match every conversation in the window.
+
+### Comparison kinds
+
+| `comparison_kind` | Meaning | Required field |
+|---|---|---|
+| `absolute` | Fire when `current >= threshold` | `threshold` |
+| `baseline_relative` | Fire when `current >= threshold × baseline` (baseline = same window N hours ago) | `threshold`, `baseline_hours` |
+
+### Window basis
+
+- `last_message` (default) — the conversation had any activity inside the window.
+- `first_message` — the conversation was created inside the window.
+
+### Preview the filter (no monitor created)
+
+The form preview returns a 7-day daily count + the lookback total. Use this to sanity-check
+the filter before creating a monitor.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/monitors/preview" \
+  -X POST --body '{
+    "filter": {"type": "tag", "value": "billing"},
+    "window_basis": "last_message",
+    "playbook_base_id": "BASE_ID",
+    "window_minutes": 60
+  }'
+```
+
+### List monitors
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/monitors"
+```
+
+Each item carries `last_run_at`, `last_triggered_at`, and the last 24 runs as `recent_runs`
+(sparkline data — `triggered`, `current_value`, `threshold_value`, `baseline_value`).
+
+### Create monitor — absolute threshold
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/monitors" \
+  -X POST --body '{
+    "name": "Billing handoffs spike",
+    "filter": {
+      "type": "group",
+      "op": "and",
+      "children": [
+        {"type": "tag",     "value": "billing"},
+        {"type": "handoff", "value": true}
+      ]
+    },
+    "window_basis": "last_message",
+    "playbook_base_id": "BASE_ID",
+    "cron_expression": "*/10 * * * *",
+    "window_minutes": 60,
+    "comparison_kind": "absolute",
+    "threshold": 50,
+    "slack_channel": "ops-alerts",
+    "email_recipients": ["oncall@example.com"]
+  }'
+```
+
+### Create monitor — baseline-relative
+
+Fires when the current count is at least `threshold ×` what it was `baseline_hours` ago.
+`threshold: 2.0` ⇒ "double the baseline". Good for catching spikes that don't have a fixed
+absolute number.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/monitors" \
+  -X POST --body '{
+    "name": "Conversation volume 2× baseline",
+    "filter": null,
+    "window_basis": "last_message",
+    "playbook_base_id": "BASE_ID",
+    "cron_expression": "*/15 * * * *",
+    "window_minutes": 30,
+    "comparison_kind": "baseline_relative",
+    "threshold": 2.0,
+    "baseline_hours": 24,
+    "slack_channel": "ops-alerts"
+  }'
+```
+
+Fields:
+
+- `name` (required)
+- `filter` (optional) — Conversation filter AST (see above). `null` matches everything.
+- `window_basis` (default `last_message`) — `last_message` or `first_message`.
+- `playbook_base_id` (required) — Scope to a single assistant (version-stable base id).
+- `cron_expression` (required, default `*/10 * * * *`) — Min 10-minute interval.
+- `window_minutes` (required, 1..1440) — How far back the count looks.
+- `comparison_kind` (default `absolute`) — `absolute` or `baseline_relative`.
+- `threshold` (required, > 0) — Absolute count or multiplier of baseline.
+- `baseline_hours` (required when `baseline_relative`, 1..168) — Hours before "now" to anchor the baseline window.
+- `slack_channel` (optional) — Slack channel name (no `#`).
+- `email_recipients` (optional) — Email addresses.
+
+At least one notification channel should be set or the monitor fires silently.
+
+### Get monitor
+
+```bash
+python3 scripts/api.py "/monitors/MONITOR_ID"
+```
+
+### Update monitor
+
+```bash
+python3 scripts/api.py "/monitors/MONITOR_ID" \
+  -X PATCH --body '{"threshold": 75, "is_enabled": false}'
+```
+
+All fields optional: `name`, `filter`, `window_basis`, `playbook_base_id`, `cron_expression`,
+`window_minutes`, `comparison_kind`, `threshold`, `baseline_hours`, `slack_channel`,
+`email_recipients`, `is_enabled`. Pass an empty group (`{"type":"group","op":"and","children":[]}`)
+to clear the filter.
+
+### Duplicate monitor
+
+Creates a disabled copy named `copy-{original.name}` with the same scope, schedule, and
+delivery — useful for A/B tweaking thresholds without touching the live one.
+
+```bash
+python3 scripts/api.py "/monitors/MONITOR_ID/duplicate" -X POST
+```
+
+### Delete monitor
+
+```bash
+python3 scripts/api.py "/monitors/MONITOR_ID" -X DELETE
+```
+
+> **Sandbox (`sbs_`) callers:** delete is the one operation gated by `require_human`. The
+> request returns **202** with `{"approval_id": "...", "status": "pending", "description": "...",
+> "message": "Request queued for admin approval."}` instead of executing immediately. Confirm
+> the deletion with the user (or the admin) before relying on the queue. Every other monitor
+> operation (preview, create, list, get, update, duplicate, test, runs) executes synchronously.
+
+### Test run a monitor
+
+Inline manual evaluation. Persists a run row, and **delivers Slack/email if it would fire** —
+clearly marked as a TEST run so it doesn't get confused with a real fire. Use it after
+creating or editing a monitor to sanity-check the wiring.
+
+```bash
+python3 scripts/api.py "/monitors/MONITOR_ID/test" -X POST
+```
+
+### List monitor runs
+
+```bash
+python3 scripts/api.py "/monitors/MONITOR_ID/runs" --params limit=50 offset=0
+```
+
+Returns past runs (newest first) with `status`, `triggered`, `current_value`,
+`threshold_value`, `baseline_value`, `summary`, `window_start`, `window_end`,
+`error_message`, `started_at`, `completed_at`.
+
+### Get a specific run
+
+```bash
+python3 scripts/api.py "/monitors/runs/RUN_ID"
+```
+
+---
+
 ## Trending Topics
 
 Trending topics analysis identifies the top conversation themes for a project over a configurable time window. Analysis runs asynchronously via a background job with progress tracking.
