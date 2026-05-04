@@ -851,8 +851,8 @@ python3 scripts/api.py "/monitors/MONITOR_ID/duplicate" -X POST
 python3 scripts/api.py "/monitors/MONITOR_ID" -X DELETE
 ```
 
-> **Sandbox (`sbs_`) callers:** delete is the one operation gated by `require_human`. The
-> request returns **202** with `{"approval_id": "...", "status": "pending", "description": "...",
+> **Sandbox (`sbs_`) callers:** delete is the one operation that needs a human reviewer.
+> The request returns **202** with `{"approval_id": "...", "status": "pending", "description": "...",
 > "message": "Request queued for admin approval."}` instead of executing immediately. Confirm
 > the deletion with the user (or the admin) before relying on the queue. Every other monitor
 > operation (preview, create, list, get, update, duplicate, test, runs) executes synchronously.

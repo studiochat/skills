@@ -473,7 +473,7 @@ Returns: `AlertRun`
 
 Aggregate-style triggers (count of conversations matching a filter) evaluated on a cron
 schedule. Read endpoints, mutations, preview, and test all accept `sbs_` keys directly.
-Delete is gated by `require_human` — `sbs_` callers get a **202** with an approval id.
+Delete needs a human reviewer — `sbs_` callers get a **202** with an approval id.
 
 ### Preview Monitor
 `POST /projects/{pid}/monitors/preview`
