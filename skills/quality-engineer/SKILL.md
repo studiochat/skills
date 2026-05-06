@@ -128,6 +128,136 @@ The assistant sees this context exactly as it would in a real conversation.
 
 ---
 
+## Mocking Tools (`tool_mocks`)
+
+By default, an eval run calls real tools — search the real KB, hit the real API, send the real Slack message. That's great for end-to-end coverage but bad for determinism: a flaky third-party API or a missing fixture record can fail an unrelated assertion.
+
+`tool_mocks` lets a case **stub specific tools** with canned responses. Use it when you want to test the assistant's *prompt and reasoning logic* in isolation — without depending on real-world state.
+
+### Shape
+
+`tool_mocks` lives on the case body. Each key is a tool name; each value is one rule or an ordered list of rules:
+
+```json
+{
+  "name": "refund-when-eligible",
+  "scenario": "...",
+  "termination": "...",
+  "tool_mocks": {
+    "lookup_order": {
+      "match_kind": "any",
+      "return_value": {"order_id": "ORD-123", "status": "delivered", "days_since": 5}
+    },
+    "process_refund": {
+      "match_kind": "any",
+      "return_value": {"refund_id": "RFND-999", "amount": 49.99}
+    }
+  }
+}
+```
+
+### Match modes
+
+A rule fires only when its `match_kind` matches the call:
+
+| `match_kind` | Fires when… | Required field |
+|---|---|---|
+| `any` | always | — |
+| `call_ordinal` | the Nth call to this tool (1-indexed) | `call_ordinal: int` |
+| `args_match` | call args ⊇ `match_args` (subset filter; missing keys are wildcards) | `match_args: dict` |
+
+### Payload: exactly one of `return_value` or `error`
+
+```json
+{
+  "tool_mocks": {
+    "send_email": {"match_kind": "any", "error": "SMTP unavailable"},
+    "lookup_user": {
+      "match_kind": "args_match",
+      "match_args": {"plan": "enterprise"},
+      "return_value": {"name": "Acme Corp", "tier": "enterprise"}
+    }
+  }
+}
+```
+
+`error` raises a tool error inside the run (the assistant sees it the same way it would see a real API failure — useful for testing error handling). `return_value` is whatever JSON the tool would normally return.
+
+### Multiple rules per tool, first-match-wins
+
+Pass an array to express "specific case → fallback":
+
+```json
+{
+  "tool_mocks": {
+    "lookup_order": [
+      {"match_kind": "args_match", "match_args": {"order_id": "ORD-123"}, "return_value": {"status": "delivered"}},
+      {"match_kind": "args_match", "match_args": {"order_id": "ORD-999"}, "return_value": {"status": "lost"}},
+      {"match_kind": "any", "error": "Order not found"}
+    ]
+  }
+}
+```
+
+Rules are evaluated top-to-bottom; the first match wins. The catch-all `any` rule at the end keeps the run safe if the assistant calls with an unexpected argument.
+
+### Multi-call sequences
+
+Use `call_ordinal` to return different values across consecutive calls:
+
+```json
+{
+  "tool_mocks": {
+    "search_kb": [
+      {"match_kind": "call_ordinal", "call_ordinal": 1, "return_value": [{"title": "Refund policy", "snippet": "..."}]},
+      {"match_kind": "call_ordinal", "call_ordinal": 2, "return_value": [{"title": "Refund timeline", "snippet": "..."}]}
+    ]
+  }
+}
+```
+
+### Important: mocks are exhaustive per tool
+
+Once you mock a tool, the rule list is **complete** — every call to that tool during the run must match a rule. If the assistant calls `lookup_order` a third time and no rule matches, the run **fails loudly** with `no mock matched call #3 for tool lookup_order`.
+
+This is intentional: silently falling through to the real implementation would let production state leak into eval runs and make failures impossible to reproduce. Always include an `any` catch-all (or extra `call_ordinal` rules) if you don't know exactly how many times the assistant will call a tool.
+
+Tools you DON'T list in `tool_mocks` are unaffected — they call the real implementation as usual.
+
+### Combining mocks with tool assertions
+
+`tool_called` and `tool_not_called` assertions both support `args_match` for "the assistant called X with these specific args" (or "must not call X with these args"). Combine with mocks to test fine-grained behavior:
+
+```json
+{
+  "tool_mocks": {
+    "send_email": {"match_kind": "any", "return_value": {"sent": true}}
+  },
+  "assertions": [
+    {"type": "tool_called", "name": "send_email", "args_match": {"to": "support@example.com"}},
+    {"type": "tool_not_called", "name": "send_email", "args_match": {"to": "ceo@example.com"}}
+  ]
+}
+```
+
+## Per-Case User Context (`user_context`)
+
+A case can override the run-level `user_context` for its own scope. Case keys win over run keys; the special `eval_overrides` sub-namespace is shallow-merged.
+
+```json
+{
+  "name": "vip-customer-flow",
+  "user_context": {
+    "plan": "enterprise",
+    "eval_overrides": {"agent_name": "PremiumBot"}
+  }
+}
+```
+
+Use this when one case needs a different user identity, plan, or simulated state without affecting the rest of the run.
+
+---
+
 ## Writing Good Test Cases
 
 ### Scenario Guidelines
