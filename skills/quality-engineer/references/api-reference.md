@@ -41,8 +41,45 @@ Create a single eval test case for a playbook.
 | `max_turns` | int | No | Max turns (1-50, default: 10) |
 | `assertions` | array | No | `[{"criteria": "..."}]` — LLM-evaluated criteria |
 | `assertion_tags` | array | No | `["tag1", "tag2"]` — tags the assistant should apply |
+| `tool_mocks` | object | No | Stub specific tools with canned responses for this case. See [Tool Mocks](#tool-mocks) below. |
+| `user_context` | object | No | Per-case user context; merges over the run-level `user_context` (case wins). Use for case-specific user attributes or `eval_overrides`. |
 
 **Response:** `EvalCase` object with `id`, `created_at`, `is_enabled`, etc.
+
+### Tool Mocks
+
+`tool_mocks` is a map of tool name → rule (or list of rules). Each rule sets one match condition (`match_kind`) and exactly one payload (`return_value` xor `error`).
+
+**Match conditions:**
+
+| `match_kind` | Required field | Fires when |
+|---|---|---|
+| `any` | — | every call to this tool |
+| `call_ordinal` | `call_ordinal: int` (1-indexed) | the Nth call to this tool |
+| `args_match` | `match_args: dict` | call args ⊇ `match_args` (subset filter) |
+
+**Payload:** exactly one of `return_value` (any JSON) OR `error` (string — raised as a tool error).
+
+**Example case body with mocks:**
+
+```json
+{
+  "name": "refund-flow",
+  "scenario": "...",
+  "termination": "...",
+  "tool_mocks": {
+    "lookup_order": [
+      {"match_kind": "args_match", "match_args": {"order_id": "ORD-123"}, "return_value": {"status": "delivered"}},
+      {"match_kind": "any", "error": "Order not found"}
+    ],
+    "process_refund": {"match_kind": "any", "return_value": {"refund_id": "RFND-999"}}
+  }
+}
+```
+
+**Exhaustive contract:** once a tool has any rule, every call to that tool during the run MUST match a rule. Unmatched calls fail the run with `no mock matched call #N for tool …` — they do NOT fall through to the real implementation. Always include an `any` catch-all if call counts are uncertain.
+
+Tools not listed in `tool_mocks` are unaffected — they call the real implementation.
 
 ---
 
