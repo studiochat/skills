@@ -32,6 +32,123 @@ export STUDIO_PROJECT_ID="your-project-uuid"
 
 API keys are available by request from the Studio Chat team at hey@studiochat.io.
 
+---
+
+## QA Practice Workflow (read this first)
+
+The typical request looks like: **"se quejaron de tal ejemplo X — investigá y arreglá"**. The skill is built around that flow: reproduce the complaint, understand what drove the behaviour, fix it via in-memory overrides, validate, and only then persist a regression test.
+
+### Step 1 — Understand the complaint (cross-skill: data-expert)
+
+Before touching the assistant: find the actual conversation the customer is complaining about. The [data-expert](../data-expert/SKILL.md) skill is the right tool for this — it knows how to query the conversations API, download a specific conversation, and pull the messages + events + tool calls that happened in production. Get the conversation_id, the playbook version that was active, and the user context that was passed in. Don't try to diagnose from a screenshot or a vague summary — read what actually happened.
+
+### Step 2 — Build the mental model
+
+To know **why** the assistant did what it did, you need to understand how Studio Chat assembles the agent at runtime:
+
+| Layer | What it is | How it loads |
+|---|---|---|
+| **Playbook instructions** (`content`) | The base system prompt for the agent. Free-form text — sets persona, tone, hard rules. | Stored on the saved `Playbook` row; injected into the system prompt at compile time. |
+| **Skills (casuísticas)** | Per-scenario instruction blocks the agent loads on demand via the `load_skill` tool. Each skill has `name`, `description`, and `content`. Only `name + description` are surfaced to the LLM during skill discovery — the `content` is fetched only when `load_skill` is called. | Stored on the playbook version; the compiler attaches them to the agent. |
+| **Knowledge bases (`kb_ids`)** | Indexed snippets the agent searches via `search_knowledge_base`. Returns ranked passages with citation IDs (`[[abc12]]`) inlined in the assistant's response. | Configured on the playbook; the agent calls `search_knowledge_base` when it needs grounded info. |
+| **API tools / toolkits** | Real-world actions: Composio integrations (`SLACK_SEND_MESSAGE`, `CAL_POST_NEW_BOOKING_REQUEST`, `GMAIL_*`), custom API tools, custom toolkits. | Registered on the playbook's `api_tools` / `integrations`; the wrapper dispatches calls at runtime. |
+| **Examples** | Reference conversations the agent learns from. | Stored on the playbook; injected into the system prompt. |
+| **Enrichment tools** | Run BEFORE the agent's first turn (e.g. fetch user profile, lookup order). Their result lands in `context.enrichment`. | Configured via `enrichment_tool_ids`; not mockable through `tool_mocks`. |
+
+Whatever the assistant did wrong, the root cause lives in one (or a few) of these layers. The triage question is: was the instruction wrong? Was a skill missing or loading the wrong content? Was the KB result irrelevant? Did a tool return unexpected data? Use `qa.py chat --verbose` to see the **full picture** of each turn (see Step 4 below).
+
+### Step 3 — REQUIRED: ask the user what to mock before chatting / before any eval run
+
+**Before you chat with the assistant for the first time and before you trigger any eval run, you MUST ask the user whether any tools should be mocked.** This is not optional. Reasons:
+
+1. **Reproducibility**: real tools depend on real state. A refund flow that worked yesterday may behave differently today because the order was actually refunded. Mocks let you reproduce the exact conditions of the customer's complaint.
+2. **Safety**: real tools can have side effects (send a Slack message, charge a card, create a calendar event). Mocking the destructive ones during QA prevents collateral damage.
+3. **Edge cases**: the customer complaint often involves a tool failure ("the assistant said my order was lost"). The only way to reliably reproduce that is to mock the tool with the failing payload.
+
+When you ask, **enumerate the tools that are mockable for this playbook** so the user knows what's available. The list is the playbook's `api_tools` + the project's configured Composio/custom toolkits + the built-in tools the agent always has (`search_knowledge_base`, `load_skill`, `list_agents`, `list_teams`, `list_kbs`). Don't enumerate the events (they aren't tools) — see "What's NOT mockable" below.
+
+Example prompt to the user:
+
+> "Antes de chatear / antes de correr el eval: ¿querés mockear alguna tool? Las disponibles en este assistant son:
+> - **Composio**: `SLACK_SEND_MESSAGE`, `CAL_POST_NEW_BOOKING_REQUEST`, `GMAIL_SEND_EMAIL` (los que tenga el project)
+> - **API tools del playbook**: `lookup_order`, `process_refund`, `create_ticket` (los que estén en `api_tools`)
+> - **Built-ins**: `search_knowledge_base`, `load_skill`
+>
+> Para reproducir la queja, capaz quieras mockear `lookup_order` con un payload de error o `search_knowledge_base` con un snippet específico. ¿Algún caso particular?"
+
+If the user says "ninguna, dale así nomás" — proceed without mocks. But don't skip the question.
+
+### Step 4 — Reproduce + iterate via chat with overrides + mocks
+
+```bash
+# Reproduce the complaint exactly. Override the instructions OR skills if
+# you already have a hypothesis about the fix; mock the tools that drove
+# the failing behaviour.
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID \
+  --message "Quiero un reembolso del pedido ORD-99999" \
+  --conversation-id qa_repro_001 \
+  --tool-mocks-file ./mocks/refund-not-found.json \
+  --verbose
+```
+
+**Read the WHOLE response, not just the message.** `qa.py chat` prints to stderr a structured breakdown:
+
+| Section | What to look at |
+|---|---|
+| **Events** | The message the user would see, but also `label` / `note` / `handoff_agent` / `priority` events the assistant emitted. A `[note]` is a private note (invisible to the customer but written to the conversation). A `[handoff_agent]` or `[handoff_team]` means the assistant gave up. |
+| **Tool calls** | Every tool invoked, with arguments and result. `load_skill` tells you which skill the agent picked up — if the wrong one fired, the description text on that skill is wrong (the LLM picks skills off name+description, not content). `search_knowledge_base` shows the query and which articles came back — if the result is irrelevant, the KB content or chunking is the problem. `[MOCKED]` after a tool name means the response came from your mock, not the real tool. |
+| **Citations** | Which KB articles the agent actually quoted. If the assistant cites the wrong article, either the article content is wrong or the search ranking is. |
+| **Explanation** | Agent's own reasoning summary. Useful for catching subtle path choices ("decided to escalate because user asked twice"). |
+
+Iterate by tweaking `--instructions` / `--skills-file` / `--tool-mocks-file` until the fix works. Nothing is persisted — no version bump, no chatlog pollution.
+
+### Step 5 — Dry-run a candidate eval case (optional but recommended)
+
+Before persisting a new test case, validate the case definition itself with `qa.py dry-run start`. This runs the simulator + judge ONCE against an unsaved `EvalCaseCreate` payload (with the same `playbook_override` if you're still iterating on the variant). Catches problems like a too-vague `termination` that never fires, or an assertion the LLM judge can't grade. Nothing is written to `eval_cases` or `eval_runs`.
+
+### Step 6 — Persist the case + run only it
+
+Once the fix works and the case definition is sound, save it and re-run **just that case** against the variant (or against the new saved playbook version, if you've promoted the override).
+
+```bash
+# Save the case
+python3 scripts/qa.py cases create PLAYBOOK_BASE_ID --body '{
+  "name": "refund-order-not-found-handoff",
+  "scenario": "Customer asks for a refund for an order that the lookup API returns as not-found.",
+  "termination": "The assistant escalates to a human agent",
+  "max_turns": 5,
+  "assertions": [
+    {"criteria": "The assistant does not fabricate an order status"},
+    {"type": "handoff", "name": "handoff"}
+  ],
+  "tool_mocks": {
+    "lookup_order": {"match_kind": "any", "error": "Order not found"}
+  }
+}'
+
+# Run only this case (ignores is_enabled — works even on disabled cases
+# while you're still iterating)
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID \
+  --playbook-id VERSION_ID \
+  --case-ids NEW_CASE_ID
+```
+
+The case carries its own `tool_mocks` so future runs reproduce the exact failure mode deterministically without you having to specify mocks again.
+
+### Cheat sheet — which mechanism for which question
+
+| Question | Mechanism |
+|---|---|
+| "What did the assistant actually do in prod?" | data-expert skill — pull the real conversation |
+| "Does changing the prompt fix it?" | `qa.py chat --instructions ...` |
+| "Does a different skill fire?" | `qa.py chat --skills-file ...` |
+| "What does the assistant do when this tool returns X?" | `qa.py chat --tool-mocks-file ...` |
+| "Is my new case definition gradable?" | `qa.py dry-run start --case ...` |
+| "Did the fix pass without breaking the rest?" | `qa.py runs create` (no `--case-ids`) |
+| "Just re-run THIS one case quickly" | `qa.py runs create --case-ids ID` |
+
+---
+
 ## Scripts
 
 ### qa.py — Eval & testing API client
@@ -49,13 +166,24 @@ python3 scripts/qa.py cases batch PLAYBOOK_BASE_ID --body '{"cases": [...]}'
 # Delete a test case
 python3 scripts/qa.py cases delete CASE_ID
 
-# Trigger an eval run
+# Trigger an eval run (all enabled cases, playbook's default models)
 python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID [--context '{}']
 
 # Trigger an eval run against UNSAVED instructions / skills (no version bumped)
 python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
     --instructions-file ./draft-prompt.md \
     --skills-file ./draft-skills.json
+
+# Trigger a run on a SUBSET of cases (ignores is_enabled — disabled cases included)
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
+    --case-ids CASE_ID_1,CASE_ID_2
+
+# Trigger a run with model overrides + parallelism
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
+    --model openai-direct/gpt-4o-mini \
+    --simulator-model anthropic/claude-sonnet-4 \
+    --judge-model openai/gpt-4o \
+    --concurrency 4
 
 # List eval runs
 python3 scripts/qa.py runs list PLAYBOOK_BASE_ID
@@ -77,6 +205,17 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Follow up" --conversation
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hi" \
     --instructions "Reply in English. Be very concise." \
     --skills-file ./draft-skills.json
+
+# Chat with MOCKED tool responses (stub Slack / KB / API tools — admin only)
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Quiero un reembolso de ORD-99999" \
+    --tool-mocks-file ./mocks.json
+
+# Dry-run a candidate eval case WITHOUT persisting it (validate the case
+# definition before committing it via `cases create`)
+python3 scripts/qa.py dry-run start PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
+    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"criteria":"..."}]}'
+python3 scripts/qa.py dry-run status DRY_RUN_ID
+python3 scripts/qa.py dry-run cancel DRY_RUN_ID
 ```
 
 ## Full API Reference
@@ -135,6 +274,123 @@ assistant agent, simulating a real user with specific attributes:
 ```
 
 The assistant sees this context exactly as it would in a real conversation.
+
+### Picking which cases to run
+
+By default a run executes **every enabled case** for the playbook. Two ways to narrow it:
+
+- **`is_enabled` flag** (persistent): toggle via the UI or `PATCH /eval-cases/{id}`. Permanently skips a case across all runs.
+- **`case_ids` per-run** (ephemeral): pass `--case-ids` on `runs create`. Only those cases execute and **`is_enabled` is ignored** — pick a single disabled case while iterating without flipping flags on the rest.
+
+```bash
+# Run just two specific cases (works even if they're disabled)
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
+  --case-ids c1f8...,c2d4...
+```
+
+Empty `--case-ids` ⇒ 400. Unknown IDs ⇒ 404. Omit the flag for the historical "all enabled" behaviour.
+
+### Dry-running a candidate case (no persistence)
+
+`qa.py dry-run start` runs the simulator + judge ONCE against an unsaved `EvalCaseCreate` payload — same pipeline as a real eval run, no rows written to `eval_cases` or `eval_runs`. Use this to:
+
+- Validate a candidate case definition before persisting (does the simulator generate plausible user turns? does the `termination` fire? are the assertions gradable?).
+- Test an instructions/skills change against one specific scenario without bumping a playbook version.
+
+State lives in memory for ~30 minutes and is polled by dry-run ID:
+
+```bash
+DRY_RUN_ID=$(python3 scripts/qa.py dry-run start PLAYBOOK_BASE_ID \
+  --playbook-id VERSION_ID \
+  --case '{
+    "name": "refund-poc",
+    "scenario": "User asks for a refund for ORD-12345.",
+    "termination": "The assistant confirms the refund will be processed",
+    "max_turns": 6,
+    "assertions": [{"criteria": "The assistant asks for the order number"}]
+  }' \
+  --instructions "You are a refund specialist. Always ask for the order number first." \
+  | jq -r .dry_run_id)
+
+# Poll until completed / failed / cancelled
+python3 scripts/qa.py dry-run status $DRY_RUN_ID
+# or bail out if it's clearly going wrong
+python3 scripts/qa.py dry-run cancel $DRY_RUN_ID
+```
+
+If the dry-run passes and the conversation looks right, persist the case via `cases create` and move to Step 6 of the [QA practice workflow](#qa-practice-workflow-read-this-first).
+
+### Model overrides
+
+Three independent model knobs control different LLM calls during an eval. All default to the playbook's configured model (or the eval-system env default for simulator/judge), and all accept the same OpenRouter-compatible syntax.
+
+| Flag | What it controls | Default |
+|---|---|---|
+| `--model` | The **assistant** LLM (the playbook agent under test) | Playbook's configured model |
+| `--simulator-model` | The LLM that role-plays the **user** in each case | `anthropic/claude-sonnet-4` (env: `EVAL_SIMULATOR_MODEL`) |
+| `--judge-model` | The LLM that grades **text-type** assertions. Structured assertions (`tool_called`, `handoff_to_agent`, etc.) run deterministic checks and ignore this. | `openai/gpt-4o` (env: `EVAL_EVALUATOR_MODEL`) |
+
+**Syntax** (same for all three flags):
+
+- `provider/model_id` — single model. Examples: `openai-direct/gpt-4o-mini`, `anthropic/claude-sonnet-4`.
+- `primary{timeout}fallback` — primary first; on timeout (seconds) fall back. Example: `groq/llama-3.3-70b-versatile{8}openai-direct/gpt-4o-mini`.
+- `modelA:50,modelB:50` — A/B experiment. Percentages must sum to 100; cases are hash-assigned to a variant by conversation_id.
+
+Bad input ⇒ 422 at the API edge (e.g. percentages that don't sum to 100, or a bare `gpt-4o-mini` without provider prefix). Empty/whitespace ⇒ field ignored.
+
+#### Recommended models (use these exact slugs — don't invent new ones)
+
+OpenRouter's catalog is strict; invented slugs will 422. These are the slugs actually in use across the Studio Chat stack:
+
+**Anthropic — Claude:**
+
+| Slug | Notes |
+|---|---|
+| `anthropic/claude-sonnet-4.6` | Newest Sonnet. Default for the assistant in most scenarios. |
+| `anthropic/claude-sonnet-4.5` | One rev behind 4.6. |
+| `anthropic/claude-sonnet-4` | Eval-system default for the **simulator** (`EVAL_SIMULATOR_MODEL`). |
+| `anthropic/claude-3.5-sonnet` | Stable older Sonnet; cheap baseline for diffs. |
+| `anthropic/claude-haiku-4.5` | Newest Haiku — fast / cheap. Good for high-volume runs or the simulator when latency matters more than nuance. |
+
+**OpenAI — GPT:**
+
+| Slug | Notes |
+|---|---|
+| `openai/gpt-5.4` | Newest GPT-5 flagship. |
+| `openai/gpt-5.4-mini` | GPT-5 mini. Supports `[reasoning=…]` suffix (see below). |
+| `openai/gpt-5.2-chat` | Stable GPT-5 chat variant. |
+| `openai/gpt-4.1-mini` | Solid mid-tier. |
+| `openai/gpt-4.1-nano` | Smallest GPT-4.1 — cheap. |
+| `openai/gpt-4o` | GPT-4o via the OpenRouter pool. Default for the **judge** (`EVAL_EVALUATOR_MODEL`). |
+| `openai/gpt-4o-mini` | Cheap judge / assistant. |
+| `openai-direct/gpt-4o` | Same model via the **direct** OpenAI provider (skips OpenRouter pool — lower latency, different billing). |
+| `openai-direct/gpt-4o-mini` | Direct-provider 4o-mini. |
+
+**Google — Gemini:**
+
+| Slug | Notes |
+|---|---|
+| `google/gemini-2.5-flash` | Newest stable Flash. |
+| `google/gemini-2.5-flash-lite` | Cheaper Flash variant. |
+| `google/gemini-2.0-flash-001` | Previous Flash generation. |
+| `google/gemini-3-flash-preview` | Gemini 3 Flash preview — may change. |
+
+> **Gemini caveat**: there's a known tool-calling bias in this codebase ([docs/gemini-tool-call-bias.md](https://github.com/surfingdev/kaptbase/blob/main/docs/gemini-tool-call-bias.md)). Prefer Sonnet for the **assistant** when the playbook leans heavily on tools.
+
+#### Reasoning effort suffix (GPT-5 family)
+
+OpenAI reasoning-capable models accept an optional `[reasoning=X]` suffix. Valid efforts: `none`, `low`, `medium`, `high`, `xhigh`. `none` disables reasoning entirely. Example:
+
+```
+openai/gpt-5.4-mini[reasoning=medium]
+openai/gpt-5.2-chat[reasoning=none]
+```
+
+The suffix composes with the other syntactic forms.
+
+### Concurrency
+
+`--concurrency` (1..5, default `1`) fans cases out across a server-side thread pool. `1` keeps the sequential walk; higher values are useful when the case suite is large but watch for the simulator/agent provider's rate limits — 429s surface in `EvalResult.error_message`. Recommended 3–5 for ad-hoc runs.
 
 ---
 
@@ -310,9 +566,32 @@ Any subset of these keys is valid — omitted keys keep the saved playbook value
 
 ## Mocking Tools (`tool_mocks`)
 
-By default, an eval run calls real tools — search the real KB, hit the real API, send the real Slack message. That's great for end-to-end coverage but bad for determinism: a flaky third-party API or a missing fixture record can fail an unrelated assertion.
+By default, an eval run or a chat call invokes real tools — searches the real KB, hits the real API, sends the real Slack message. That's great for end-to-end coverage but bad for QA: it depends on real-world state, can have destructive side effects, and makes it hard to reproduce a customer complaint that involved a specific tool failure.
 
-`tool_mocks` lets a case **stub specific tools** with canned responses. Use it when you want to test the assistant's *prompt and reasoning logic* in isolation — without depending on real-world state.
+`tool_mocks` lets you **stub specific tools** with canned responses. Same wire shape and semantics in two places:
+
+| Where | Field | When mocks apply |
+|---|---|---|
+| **Per case** (saved) | `EvalCase.tool_mocks` | Every time the case runs in any eval |
+| **Per chat call** (ephemeral) | `PlaybookChatRequest.tool_mocks` | This chat request only — forced into preview+eval mode (admin only) |
+
+Step 3 of the [QA practice workflow](#qa-practice-workflow-read-this-first) makes asking the user about mocks **mandatory** before any chat or eval run. The rest of this section covers the shape + the rules.
+
+### What can and cannot be mocked
+
+**Mockable** (anything that dispatches through the agent's toolset wrapper):
+
+- **Composio integrations**: tool names follow the `TOOLKIT_ACTION` uppercase convention. Examples: `SLACK_SEND_MESSAGE`, `CAL_POST_NEW_BOOKING_REQUEST`, `CAL_CANCEL_BOOKING_VIA_UID`, `GMAIL_SEND_EMAIL`. The exact list depends on which toolkits are configured in `SUPPORTED_TOOLKITS` for the project.
+- **Custom API tools**: the entries in the playbook's `api_tools`. Names match what the playbook author registered (typically `snake_case`).
+- **Custom toolkit tools**: same as Composio but registered via the in-house `CUSTOM_TOOLKIT_REGISTRY`.
+- **Built-in tools**: `search_knowledge_base`, `load_skill`, `list_agents`, `list_teams`, `list_kbs`.
+
+Tool names in the mock map must match `ToolCallTrace.name` exactly — uppercase for Composio, snake_case for the rest.
+
+**NOT mockable** (not dispatched as tool calls):
+
+- **Agent events**: `message`, `note`, `label`, `priority`, `handoff_agent`, `handoff_team`. These are items the LLM emits inside its structured output payload, parsed downstream by the chat handler — they never go through the wrapper. To validate them, use the matching structured assertions (`HandoffAssertion`, `PrioritySetAssertion`, `TagAddedAssertion`, `PrivateNoteContainsAssertion`).
+- **Enrichment tools** (`enrichment_tool_ids`): run BEFORE the agent's first turn. The wrapper doesn't exist yet at that point in the request lifecycle.
 
 ### Shape
 
@@ -419,6 +698,41 @@ Tools you DON'T list in `tool_mocks` are unaffected — they call the real imple
   ]
 }
 ```
+
+### Mocking during chat (no persisted case)
+
+The same `tool_mocks` shape works on `qa.py chat` via `--tool-mocks-file`, letting you stub tool responses for a single ad-hoc chat without authoring a case. Useful in Step 4 of the [QA practice workflow](#qa-practice-workflow-read-this-first) when you're still hunting for the fix.
+
+Semantics:
+
+- **Admin / API-key only** — same gate as `--instructions` / `--skills-file`.
+- **Forces preview + eval mode** — the conversation is excluded from chatlogs, sticky-model assignment, and production analytics. Same semantics as `--instructions`, so they compose cleanly.
+- **Mocked calls are flagged in the output**: `qa.py chat` prints `[MOCKED]` next to the tool name in the `Tool calls` section so you can tell stubbed responses apart from real ones.
+
+Example `mocks.json` reproducing a "lookup_order returns not-found, KB has no refund policy" scenario:
+
+```json
+{
+  "lookup_order": {"match_kind": "any", "error": "Order not found"},
+  "search_knowledge_base": {
+    "match_kind": "any",
+    "return_value": []
+  }
+}
+```
+
+Then chat:
+
+```bash
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID \
+  --message "Quiero un reembolso del pedido ORD-99999" \
+  --tool-mocks-file ./mocks.json \
+  --verbose
+```
+
+Watch the `Tool calls` section for `lookup_order [custom] [MOCKED]` and verify the assistant's response handles the error gracefully (e.g. escalates instead of fabricating an order status).
+
+> **Note**: run-level `tool_mocks` on `qa.py runs create` is not supported — per-case `tool_mocks` lives on the case body itself. If you need deterministic mocks across a whole run, put them on each case (or use a `--case-ids` subset against cases that already carry mocks). The CLI rejects `--tool-mocks-file` on `runs create` with a clear error.
 
 ## Per-Case User Context (`user_context`)
 
@@ -701,3 +1015,14 @@ Periodically run evals to catch drift:
 2. **Check pass rate** — compare with historical runs
 3. **Investigate new failures** — read the conversation + assertion explanations
 4. **Update test cases** — add new cases for issues found in production (use data-expert skill to find problematic conversations)
+
+### 4. Triage a customer complaint
+
+The most common request — full detail in the [QA Practice Workflow](#qa-practice-workflow-read-this-first) section at the top. Short form:
+
+1. **data-expert** → pull the offending conversation, identify the playbook version + user_context that was active
+2. **Build mental model** — which layer (instructions / skill / KB / tool) drove the bad behaviour
+3. **REQUIRED: ask the user what to mock** — enumerate available tools, get confirmation
+4. **Reproduce + iterate**: `qa.py chat --instructions ... --tool-mocks-file ...`. Read the full response (events, tool calls, citations, explanation), not just the assistant message.
+5. **Dry-run the candidate case** to validate the case definition itself
+6. **Persist case + run only it**: `cases create` then `runs create --case-ids NEW_CASE_ID` (still with the override / mocks while iterating; drop them once the playbook version is promoted).

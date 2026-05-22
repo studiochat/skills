@@ -12,6 +12,8 @@ Usage:
     qa.py cases update CASE_ID --body '{...}'
     qa.py cases delete CASE_ID
     qa.py runs create PLAYBOOK_BASE_ID --playbook-id ID [--context '{}']
+                                       [--case-ids id1,id2,...] [--concurrency N]
+                                       [--model M] [--simulator-model M] [--judge-model M]
                                        [--instructions-file FILE | --instructions TEXT]
                                        [--skills-file FILE] [--examples-file FILE]
                                        [--kb-ids id1,id2] [--api-tools t1,t2]
@@ -23,7 +25,13 @@ Usage:
                                 [--instructions-file FILE | --instructions TEXT]
                                 [--skills-file FILE] [--examples-file FILE]
                                 [--kb-ids id1,id2] [--api-tools t1,t2]
+                                [--tool-mocks-file FILE]
                                 [--verbose]
+    qa.py dry-run start PLAYBOOK_BASE_ID --playbook-id ID --case '{...}'
+                                         [--instructions-file FILE | --instructions TEXT]
+                                         [--skills-file FILE] [--examples-file FILE]
+    qa.py dry-run status DRY_RUN_ID
+    qa.py dry-run cancel DRY_RUN_ID
 
 Playbook override flags (chat and runs create):
     Pass any subset of the flags below to test instructions / skills WITHOUT
@@ -41,6 +49,13 @@ Playbook override flags (chat and runs create):
       --examples-file FILE        JSON file with a list of example dicts.
       --kb-ids id1,id2            Comma-separated KB IDs to use (replaces playbook's).
       --api-tools t1,t2           Comma-separated API tool IDs (replaces playbook's).
+      --tool-mocks-file FILE      JSON file with {tool_name: ToolMockSpec | [...]}.
+                                  Stubs specific tool calls with canned responses
+                                  for this chat/run, mirroring EvalCase.tool_mocks
+                                  semantics. Forces preview+eval mode so the
+                                  conversation does NOT pollute production analytics
+                                  or chatlogs. Mocked calls surface with
+                                  is_mocked=true in the response's tool_calls.
 
 Requires the auth token to have admin or API-key privileges.
 """
@@ -261,12 +276,75 @@ def cmd_cases_delete(case_id):
 # === Runs ===
 
 
-def cmd_runs_create(base_id, playbook_id, context=None, playbook_override=None):
+def _load_tool_mocks_file(path):
+    """Read a tool_mocks JSON file and validate the top-level shape.
+
+    Accepts the same wire shape as ``EvalCase.tool_mocks`` and the chat
+    endpoint's ``tool_mocks`` field: a dict keyed by tool name (the
+    string that appears in ``ToolCallTrace.name`` — uppercase
+    ``TOOLKIT_ACTION`` for Composio tools, snake_case for built-ins
+    and custom API tools), with values that are either a single
+    ToolMockSpec or a list of them. The BE does the Pydantic
+    validation; we just sanity-check the wrapper shape so an obviously
+    malformed file doesn't pollute the request.
+    """
+    if not path:
+        return None
+    mocks = _read_json_file(path)
+    if not isinstance(mocks, dict):
+        print(
+            f"Error: --tool-mocks-file {path} must contain a JSON object "
+            "({tool_name: ToolMockSpec | [ToolMockSpec, ...]}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return mocks
+
+
+def cmd_runs_create(
+    base_id,
+    playbook_id,
+    context=None,
+    playbook_override=None,
+    case_ids=None,
+    concurrency=None,
+    model=None,
+    simulator_model=None,
+    judge_model=None,
+    tool_mocks=None,
+):
     body = {"playbook_id": playbook_id}
     if context:
         body["user_context"] = context
     if playbook_override is not None:
         body["playbook_override"] = playbook_override
+    # Optional EvalRunCreate tunables — only forwarded when set so the BE
+    # falls back to its defaults (use-playbook-default model, run-all-enabled,
+    # concurrency=1) when the operator doesn't supply them.
+    if case_ids:
+        body["case_ids"] = case_ids
+    if concurrency is not None:
+        body["concurrency"] = concurrency
+    if model:
+        body["model"] = model
+    if simulator_model:
+        body["simulator_model"] = simulator_model
+    if judge_model:
+        body["judge_model"] = judge_model
+    # NOTE: run-level tool_mocks are NOT supported by the BE — per-case
+    # tool_mocks live on the case body itself (``EvalCase.tool_mocks``).
+    # If the QA caller wants to mock during a run, the right place is the
+    # case definition, not the run trigger. We forward ``tool_mocks`` only
+    # for the chat path. This branch stays for symmetric flag parsing in
+    # main(); if someone passes ``--tool-mocks-file`` to ``runs create``
+    # we surface a clear error here rather than silently ignoring it.
+    if tool_mocks is not None:
+        print(
+            "Error: --tool-mocks-file is only valid on `qa.py chat`. For runs, "
+            "put tool_mocks on the individual case body (see `qa.py cases create`).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     data = _request("POST", f"/playbooks/{base_id}/eval-runs", body=body)
     print(f"Run started: {data['id']} (status: {data['status']})", file=sys.stderr)
     if playbook_override is not None:
@@ -275,6 +353,8 @@ def cmd_runs_create(base_id, playbook_id, context=None, playbook_override=None):
             f"(fields: {', '.join(sorted(playbook_override.keys()))})",
             file=sys.stderr,
         )
+    if case_ids:
+        print(f"  ↳ running {len(case_ids)} selected case(s)", file=sys.stderr)
     _print_json(data)
 
 
@@ -300,6 +380,42 @@ def cmd_runs_cancel(run_id):
     _print_json(data)
 
 
+# === Dry-run (per-case ephemeral "Simulate") ===
+#
+# Runs a single unsaved EvalCase against a playbook version, with optional
+# playbook_override applied for the duration. State lives in process for
+# ~30 minutes and is polled by dry_run_id. Nothing is persisted to
+# ``eval_cases`` or ``eval_runs`` — ideal for de-risking a case definition
+# before committing it, or for validating an instructions/skills change
+# against a specific scenario without bumping a version.
+
+
+def cmd_dry_run_start(base_id, playbook_id, case, playbook_override=None):
+    body = {"playbook_id": playbook_id, "case": case}
+    if playbook_override is not None:
+        body["playbook_override"] = playbook_override
+    data = _request("POST", f"/playbooks/{base_id}/eval-cases/dry-run", body=body)
+    print(f"Dry-run started: {data['dry_run_id']}", file=sys.stderr)
+    if playbook_override is not None:
+        print(
+            f"  ↳ using playbook override "
+            f"(fields: {', '.join(sorted(playbook_override.keys()))})",
+            file=sys.stderr,
+        )
+    _print_json(data)
+
+
+def cmd_dry_run_status(dry_run_id):
+    data = _request("GET", f"/eval-cases/dry-run/{dry_run_id}")
+    _print_json(data)
+
+
+def cmd_dry_run_cancel(dry_run_id):
+    data = _request("POST", f"/eval-cases/dry-run/{dry_run_id}/cancel")
+    print(f"Dry-run {dry_run_id} cancelled", file=sys.stderr)
+    _print_json(data)
+
+
 # === Chat ===
 
 
@@ -310,6 +426,7 @@ def cmd_chat(
     context=None,
     verbose=False,
     playbook_override=None,
+    tool_mocks=None,
 ):
     if not conversation_id:
         import uuid
@@ -325,6 +442,8 @@ def cmd_chat(
         body["context"] = context
     if playbook_override is not None:
         body["playbook_override"] = playbook_override
+    if tool_mocks is not None:
+        body["tool_mocks"] = tool_mocks
 
     data = _request("POST", f"/playbooks/{base_id}/active/chat", body=body)
 
@@ -336,6 +455,12 @@ def cmd_chat(
         print(
             f"  ↳ playbook override active "
             f"(fields: {', '.join(sorted(playbook_override.keys()))})",
+            file=sys.stderr,
+        )
+    if tool_mocks is not None:
+        print(
+            f"  ↳ tool mocks active (tools: {', '.join(sorted(tool_mocks.keys()))}) "
+            "— preview+eval mode forced; conversation excluded from chatlogs",
             file=sys.stderr,
         )
 
@@ -376,7 +501,12 @@ def cmd_chat(
                 args_obj = args_raw
 
             type_tag = f" [{ttype}]" if ttype else ""
-            print(f"  {name}{type_tag}", file=sys.stderr)
+            # ``is_mocked=true`` means the wrapper short-circuited the real
+            # tool with a canned response from ``tool_mocks``. Flagging this
+            # in the output is critical for QA — otherwise it's easy to
+            # mistake a stubbed result for a real one and chase a phantom.
+            mock_tag = " [MOCKED]" if tc.get("is_mocked") else ""
+            print(f"  {name}{type_tag}{mock_tag}", file=sys.stderr)
 
             # Show key arguments
             if isinstance(args_obj, dict):
@@ -503,7 +633,27 @@ def main():
                 api_tools=get_flag("--api-tools"),
                 enrichment_tool_ids=get_flag("--enrichment-tools"),
             )
-            cmd_runs_create(args[2], playbook_id, context, playbook_override)
+            # --case-ids accepts a comma-separated list to stay ergonomic
+            # — shells make quoting JSON arrays painful, and these are
+            # always opaque UUIDs.
+            case_ids_raw = get_flag("--case-ids")
+            case_ids = None
+            if case_ids_raw:
+                case_ids = [c.strip() for c in case_ids_raw.split(",") if c.strip()]
+            concurrency_raw = get_flag("--concurrency")
+            concurrency = int(concurrency_raw) if concurrency_raw else None
+            cmd_runs_create(
+                args[2],
+                playbook_id,
+                context,
+                playbook_override,
+                case_ids=case_ids,
+                concurrency=concurrency,
+                model=get_flag("--model"),
+                simulator_model=get_flag("--simulator-model"),
+                judge_model=get_flag("--judge-model"),
+                tool_mocks=_load_tool_mocks_file(get_flag("--tool-mocks-file")),
+            )
         elif action == "list" and len(args) >= 3:
             page = int(get_flag("--page", "1"))
             page_size = int(get_flag("--page-size", "10"))
@@ -550,10 +700,52 @@ def main():
             context,
             verbose=verbose,
             playbook_override=playbook_override,
+            tool_mocks=_load_tool_mocks_file(get_flag("--tool-mocks-file")),
         )
 
+    elif group == "dry-run":
+        # Dry-run starts an ephemeral simulator+judge run for a single
+        # unsaved case. Use this to validate a candidate case definition
+        # (does the simulator generate plausible turns? Does termination
+        # fire? Do the assertions grade right?) before persisting it via
+        # ``qa.py cases create``. State expires after ~30 min.
+        if action == "start" and len(args) >= 3:
+            playbook_id = get_flag("--playbook-id")
+            if not playbook_id:
+                print("Error: --playbook-id is required", file=sys.stderr)
+                sys.exit(1)
+            case_raw = get_flag("--case")
+            if not case_raw:
+                print(
+                    "Error: --case is required (JSON object matching EvalCaseCreate)",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            try:
+                case = json.loads(case_raw)
+            except json.JSONDecodeError as e:
+                print(f"Error: invalid JSON in --case: {e}", file=sys.stderr)
+                sys.exit(1)
+            playbook_override = build_playbook_override(
+                instructions=get_flag("--instructions"),
+                instructions_file=get_flag("--instructions-file"),
+                skills_file=get_flag("--skills-file"),
+                examples_file=get_flag("--examples-file"),
+                kb_ids=get_flag("--kb-ids"),
+                api_tools=get_flag("--api-tools"),
+                enrichment_tool_ids=get_flag("--enrichment-tools"),
+            )
+            cmd_dry_run_start(args[2], playbook_id, case, playbook_override=playbook_override)
+        elif action == "status" and len(args) >= 3:
+            cmd_dry_run_status(args[2])
+        elif action == "cancel" and len(args) >= 3:
+            cmd_dry_run_cancel(args[2])
+        else:
+            print(f"Unknown dry-run action: {action}", file=sys.stderr)
+            sys.exit(1)
+
     else:
-        print(f"Unknown group: {group}. Use 'cases', 'runs', or 'chat'", file=sys.stderr)
+        print(f"Unknown group: {group}. Use 'cases', 'runs', 'chat', or 'dry-run'", file=sys.stderr)
         sys.exit(1)
 
 
