@@ -21,6 +21,7 @@ In paths, `{base_id}` is the playbook base ID (stable across versions).
 - [Chat with Assistant](#chat-with-assistant)
 - [Get Active Version](#get-active-version)
 - [List Playbooks](#list-playbooks)
+- [Playbook Override](#playbook-override)
 
 ---
 
@@ -165,6 +166,7 @@ Triggers an evaluation run in the background. Returns immediately with a pending
 | `playbook_id` | string | Yes | Specific playbook version ID to test |
 | `trigger_source` | string | No | `api` (default), `ui`, `cli` |
 | `user_context` | object | No | Context dict passed to the agent (simulates user attributes) |
+| `playbook_override` | object | No | In-memory playbook field overrides (see [Playbook Override](#playbook-override)). Requires admin / API-key auth. |
 
 **Response:** `EvalRun` with `status: "pending"`.
 
@@ -281,6 +283,7 @@ by reusing the same `conversation_id`.
 | `context` | object | No | User context dict (email, plan, etc.) |
 | `tags` | array | No | Tags to associate with the conversation |
 | `include_citations` | bool | No | Return KB citation details in response (default: false) |
+| `playbook_override` | object | No | In-memory playbook field overrides (see [Playbook Override](#playbook-override)). Forces preview+eval mode for the conversation. Requires admin / API-key auth. |
 
 **Response:**
 
@@ -325,3 +328,76 @@ List all playbooks (assistants) in a project. Use this to discover `base_id` val
 Replace `{pid}` with `$STUDIO_PROJECT_ID`.
 
 **Response:** List of playbook objects, each with `id`, `base_id`, `name`, `version_number`.
+
+---
+
+## Playbook Override
+
+Both `POST /playbooks/{base_id}/active/chat` and `POST /playbooks/{base_id}/eval-runs` accept an optional `playbook_override` object that replaces fields on the saved playbook in memory for that call only. No new playbook version is created.
+
+**Use this to iterate on instructions or skills without persisting a draft version.** Requires admin or API-key authentication (sandbox `sbs_` keys count as admin).
+
+**Override shape:**
+
+| Field | Type | Replaces |
+|-------|------|----------|
+| `content` | string | Main playbook instructions (free-text). |
+| `skills` | list of skill objects | The full skill list. `[]` disables all skills. |
+| `examples` | list of objects | Global reference examples. |
+| `kb_ids` | list of strings | Knowledge base IDs. `[]` disables all KBs. |
+| `api_tools` | list of strings | API tool IDs. `[]` disables all tools. |
+| `enrichment_tool_ids` | list of strings | Auto-run-at-start tool IDs. |
+
+**Skill object shape** (matches the playbook skill DB shape minus ids):
+
+```json
+{
+  "name": "english-only",
+  "description": "Force English replies regardless of input language",
+  "trigger": "Always",
+  "content": "Reply only in English even when the customer writes in another language.",
+  "examples": [],
+  "order": 0
+}
+```
+
+**Semantics:**
+
+- Each field is independent. Omit a field and the saved playbook's value is used.
+- Lists are **replaced wholesale**, not merged.
+- Chat conversations using an override are forced into `is_preview=true` + `is_eval=true`, so they don't pollute production analytics, the sticky-model cache, or chatlogs.
+- Override skills have `is_active` forced to `true` server-side so they always load.
+
+**Example chat request:**
+
+```json
+POST /playbooks/PB_BASE_ID/active/chat
+{
+  "conversation_id": "qa_iter_001",
+  "user_message": "I want a refund",
+  "playbook_override": {
+    "content": "You are a CX assistant. Be terse. Always reply in English.",
+    "skills": [
+      {
+        "name": "refund-flow",
+        "description": "Handle refund requests",
+        "trigger": "User mentions refund",
+        "content": "Ask for order id, then check eligibility..."
+      }
+    ],
+    "kb_ids": ["kb-uuid-a"]
+  }
+}
+```
+
+**Example eval-run request:**
+
+```json
+POST /playbooks/PB_BASE_ID/eval-runs
+{
+  "playbook_id": "PB_VERSION_ID",
+  "playbook_override": {
+    "content": "...candidate prompt to validate against all cases..."
+  }
+}
+```

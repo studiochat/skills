@@ -12,11 +12,37 @@ Usage:
     qa.py cases update CASE_ID --body '{...}'
     qa.py cases delete CASE_ID
     qa.py runs create PLAYBOOK_BASE_ID --playbook-id ID [--context '{}']
+                                       [--instructions-file FILE | --instructions TEXT]
+                                       [--skills-file FILE] [--examples-file FILE]
+                                       [--kb-ids id1,id2] [--api-tools t1,t2]
     qa.py runs list PLAYBOOK_BASE_ID [--page N] [--page-size N]
     qa.py runs status RUN_ID
     qa.py runs results RUN_ID [-o file.json]
     qa.py runs cancel RUN_ID
-    qa.py chat PLAYBOOK_BASE_ID --message "text" [--conversation-id ID] [--context '{}'] [--verbose]
+    qa.py chat PLAYBOOK_BASE_ID --message "text" [--conversation-id ID] [--context '{}']
+                                [--instructions-file FILE | --instructions TEXT]
+                                [--skills-file FILE] [--examples-file FILE]
+                                [--kb-ids id1,id2] [--api-tools t1,t2]
+                                [--verbose]
+
+Playbook override flags (chat and runs create):
+    Pass any subset of the flags below to test instructions / skills WITHOUT
+    saving them as a new playbook version. Each override flag replaces the
+    corresponding field on the active (or named) playbook version in memory
+    for this call only. Conversations are forced into preview+eval mode so
+    they never pollute production analytics or chatlogs.
+
+      --instructions TEXT         Inline replacement for the main instructions.
+      --instructions-file FILE    Same, read from a file (use for long prompts).
+      --skills-file FILE          JSON file with a list of skill objects:
+                                  [{"name", "description", "trigger", "content",
+                                    "examples"?, "order"?}, ...]
+                                  Pass an empty list ([]) to disable all skills.
+      --examples-file FILE        JSON file with a list of example dicts.
+      --kb-ids id1,id2            Comma-separated KB IDs to use (replaces playbook's).
+      --api-tools t1,t2           Comma-separated API tool IDs (replaces playbook's).
+
+Requires the auth token to have admin or API-key privileges.
 """
 
 import json
@@ -71,6 +97,105 @@ def _print_json(data):
     print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
 
 
+def _read_text_file(path):
+    """Read a UTF-8 text file; abort the CLI with a clear error if it's missing."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"Error: file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        print(f"Error: cannot read {path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _read_json_file(path):
+    """Read a JSON file (the skill ships override skills / examples as JSON)."""
+    raw = _read_text_file(path)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Error: invalid JSON in {path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_csv_list(value):
+    """Split a comma-separated CLI value into a list of trimmed strings.
+
+    An empty value (``""``) returns an explicit empty list so the caller
+    can pass ``--kb-ids ""`` to *disable* all KBs (vs. omitting the flag,
+    which keeps the playbook's KBs).
+    """
+    if value is None:
+        return None
+    return [chunk.strip() for chunk in value.split(",") if chunk.strip()] if value else []
+
+
+def build_playbook_override(
+    instructions=None,
+    instructions_file=None,
+    skills_file=None,
+    examples_file=None,
+    kb_ids=None,
+    api_tools=None,
+    enrichment_tool_ids=None,
+):
+    """Assemble a PlaybookOverride wire dict from skill-level CLI inputs.
+
+    Returns ``None`` if none of the inputs were supplied — used as the
+    sentinel by the request shaper to *omit* the field entirely (so the
+    saved playbook content is used as-is).
+
+    The shape mirrors ``app.models.PlaybookOverride`` on the BE side; each
+    non-None key replaces the corresponding field on the playbook in
+    memory. ``skills`` / ``kb_ids`` / ``api_tools`` set to ``[]`` are kept
+    explicit so the BE actually disables them instead of falling back to
+    the saved values.
+    """
+    override: dict = {}
+
+    if instructions is not None and instructions_file is not None:
+        print(
+            "Error: --instructions and --instructions-file are mutually exclusive",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if instructions_file:
+        override["content"] = _read_text_file(instructions_file)
+    elif instructions is not None:
+        override["content"] = instructions
+
+    if skills_file:
+        skills = _read_json_file(skills_file)
+        if not isinstance(skills, list):
+            print(
+                f"Error: --skills-file {skills_file} must contain a JSON list of skill objects",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        override["skills"] = skills
+
+    if examples_file:
+        examples = _read_json_file(examples_file)
+        if not isinstance(examples, list):
+            print(
+                f"Error: --examples-file {examples_file} must contain a JSON list",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        override["examples"] = examples
+
+    if kb_ids is not None:
+        override["kb_ids"] = _parse_csv_list(kb_ids)
+    if api_tools is not None:
+        override["api_tools"] = _parse_csv_list(api_tools)
+    if enrichment_tool_ids is not None:
+        override["enrichment_tool_ids"] = _parse_csv_list(enrichment_tool_ids)
+
+    return override or None
+
+
 def _write_output(data, output_path):
     """Write JSON to file or stdout."""
     if output_path:
@@ -120,12 +245,20 @@ def cmd_cases_delete(case_id):
 # === Runs ===
 
 
-def cmd_runs_create(base_id, playbook_id, context=None):
+def cmd_runs_create(base_id, playbook_id, context=None, playbook_override=None):
     body = {"playbook_id": playbook_id}
     if context:
         body["user_context"] = context
+    if playbook_override is not None:
+        body["playbook_override"] = playbook_override
     data = _request("POST", f"/playbooks/{base_id}/eval-runs", body=body)
     print(f"Run started: {data['id']} (status: {data['status']})", file=sys.stderr)
+    if playbook_override is not None:
+        print(
+            f"  ↳ using playbook override "
+            f"(fields: {', '.join(sorted(playbook_override.keys()))})",
+            file=sys.stderr,
+        )
     _print_json(data)
 
 
@@ -154,7 +287,14 @@ def cmd_runs_cancel(run_id):
 # === Chat ===
 
 
-def cmd_chat(base_id, message, conversation_id=None, context=None, verbose=False):
+def cmd_chat(
+    base_id,
+    message,
+    conversation_id=None,
+    context=None,
+    verbose=False,
+    playbook_override=None,
+):
     if not conversation_id:
         import uuid
 
@@ -167,6 +307,8 @@ def cmd_chat(base_id, message, conversation_id=None, context=None, verbose=False
     }
     if context:
         body["context"] = context
+    if playbook_override is not None:
+        body["playbook_override"] = playbook_override
 
     data = _request("POST", f"/playbooks/{base_id}/active/chat", body=body)
 
@@ -174,6 +316,12 @@ def cmd_chat(base_id, message, conversation_id=None, context=None, verbose=False
     elapsed = data.get("elapsed_time_ms")
     elapsed_str = f" ({elapsed}ms)" if elapsed else ""
     print(f"conversation_id: {conversation_id}{elapsed_str}", file=sys.stderr)
+    if playbook_override is not None:
+        print(
+            f"  ↳ playbook override active "
+            f"(fields: {', '.join(sorted(playbook_override.keys()))})",
+            file=sys.stderr,
+        )
 
     # -- Events --
     events = data.get("events", [])
@@ -330,7 +478,16 @@ def main():
             context_raw = get_flag("--context")
             if context_raw:
                 context = json.loads(context_raw)
-            cmd_runs_create(args[2], playbook_id, context)
+            playbook_override = build_playbook_override(
+                instructions=get_flag("--instructions"),
+                instructions_file=get_flag("--instructions-file"),
+                skills_file=get_flag("--skills-file"),
+                examples_file=get_flag("--examples-file"),
+                kb_ids=get_flag("--kb-ids"),
+                api_tools=get_flag("--api-tools"),
+                enrichment_tool_ids=get_flag("--enrichment-tools"),
+            )
+            cmd_runs_create(args[2], playbook_id, context, playbook_override)
         elif action == "list" and len(args) >= 3:
             page = int(get_flag("--page", "1"))
             page_size = int(get_flag("--page-size", "10"))
@@ -361,7 +518,23 @@ def main():
         if context_raw:
             context = json.loads(context_raw)
         verbose = "--verbose" in args or "-v" in args
-        cmd_chat(base_id, message, conversation_id, context, verbose=verbose)
+        playbook_override = build_playbook_override(
+            instructions=get_flag("--instructions"),
+            instructions_file=get_flag("--instructions-file"),
+            skills_file=get_flag("--skills-file"),
+            examples_file=get_flag("--examples-file"),
+            kb_ids=get_flag("--kb-ids"),
+            api_tools=get_flag("--api-tools"),
+            enrichment_tool_ids=get_flag("--enrichment-tools"),
+        )
+        cmd_chat(
+            base_id,
+            message,
+            conversation_id,
+            context,
+            verbose=verbose,
+            playbook_override=playbook_override,
+        )
 
     else:
         print(f"Unknown group: {group}. Use 'cases', 'runs', or 'chat'", file=sys.stderr)
