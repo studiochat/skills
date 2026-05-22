@@ -169,24 +169,72 @@ Rules:
 
 ### Skills file shape
 
-`--skills-file` expects a JSON array of skill objects. Each object follows the playbook skill shape on the BE (`name`, `description`, `trigger`, `content`, optional `examples`, optional `order`):
+`--skills-file` accepts **two shapes** — pick the one that matches what you want to do.
+
+#### 1. Full replace (list of skill objects)
+
+Drop the saved playbook's skills entirely and use exactly these:
 
 ```json
 [
   {
     "name": "refund-flow",
     "description": "Handle refund requests with order id verification",
-    "trigger": "User mentions refund, return, or money back",
     "content": "First ask for the order id. Then check eligibility..."
   },
   {
     "name": "english-only",
     "description": "Force English replies",
-    "trigger": "Always",
     "content": "Reply only in English regardless of customer language."
   }
 ]
 ```
+
+Pass `[]` to disable **all** skills.
+
+#### 2. Surgical patch (object with `add` / `replace` / `remove`)
+
+Keep most of the saved skills and only modify a few. Operators are applied in order: `remove` → `replace` → `add`:
+
+```json
+{
+  "remove": ["legacy-skill-a", "legacy-skill-b"],
+  "replace": [
+    {
+      "name": "refund-flow",
+      "description": "Refund handling, tightened policy",
+      "content": "ASK for order id BEFORE confirming any refund..."
+    }
+  ],
+  "add": [
+    {
+      "name": "english-only",
+      "description": "Force English replies",
+      "content": "Reply only in English regardless of customer language."
+    }
+  ]
+}
+```
+
+**Strict-validation rules** (the BE returns `422` if violated, before any LLM call):
+- `remove` of a name that isn't on the saved playbook → 422.
+- `replace` of a name that isn't on the saved playbook → 422 (use `add` instead).
+- `add` of a name that already exists (after `remove` ran) → 422 (use `replace` instead).
+- Duplicate names within a single operator list → 422.
+
+`remove: [X]` + `add: [{name:X, ...}]` of the same name **is** allowed — after `remove` drops the saved row, the slot is free for `add`.
+
+#### Skill object shape
+
+Both shapes share the same skill object shape (matches `SkillOverrideInput` on the BE). Note: only the fields the LLM actually reads during skill discovery are accepted here — `trigger` lives on the saved-version skill row but is never injected into the system prompt, so the override endpoint omits it.
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | Unique identifier (kebab-case recommended). Matched by name in `replace`/`remove`. |
+| `description` | yes | Short summary shown to the agent during skill discovery. |
+| `content` | yes | Full instructions. Macros like `{{ kb(<id>) }}` and `{{ tool(<id>) }}` are expanded — the referenced KB / API tool must already exist in the project (the override doesn't create them). |
+| `examples` | no | Optional list of reference conversation examples. |
+| `order` | no | Display/listing order. Auto-assigned if omitted. |
 
 ### Examples
 
@@ -206,6 +254,12 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "I want a refund" \
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hello" \
     --skills-file <(echo '[]')
 
+# Surgically modify the saved skills (patch shape)
+# ./skills-patch.json:
+#   { "remove": ["old-flow"], "add": [{"name": "english-only", ...}] }
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hello" \
+    --skills-file ./skills-patch.json
+
 # Run the full eval suite against an unsaved prompt
 python3 scripts/qa.py runs create PLAYBOOK_BASE_ID \
     --playbook-id PB_VERSION_ID \
@@ -216,6 +270,8 @@ python3 scripts/qa.py runs create PLAYBOOK_BASE_ID \
 
 Both endpoints accept a `playbook_override` object on the request body. The CLI builds it for you, but if you need to call the API directly:
 
+**Full-replace form (list-shape skills):**
+
 ```json
 {
   "conversation_id": "qa_iter_001",
@@ -223,11 +279,27 @@ Both endpoints accept a `playbook_override` object on the request body. The CLI 
   "playbook_override": {
     "content": "...full instructions...",
     "skills": [
-      {"name": "...", "description": "...", "trigger": "...", "content": "..."}
+      {"name": "...", "description": "...", "content": "..."}
     ],
     "examples": [],
     "kb_ids": ["kb-uuid-1"],
     "api_tools": []
+  }
+}
+```
+
+**Surgical-patch form (object-shape skills):**
+
+```json
+{
+  "conversation_id": "qa_iter_001",
+  "user_message": "...",
+  "playbook_override": {
+    "skills": {
+      "remove": ["old-flow"],
+      "replace": [{"name": "refund-flow", "description": "...", "content": "..."}],
+      "add": [{"name": "english-only", "description": "...", "content": "..."}]
+    }
   }
 }
 ```

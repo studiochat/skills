@@ -342,24 +342,43 @@ Both `POST /playbooks/{base_id}/active/chat` and `POST /playbooks/{base_id}/eval
 | Field | Type | Replaces |
 |-------|------|----------|
 | `content` | string | Main playbook instructions (free-text). |
-| `skills` | list of skill objects | The full skill list. `[]` disables all skills. |
+| `skills` | list **or** patch object | List form: full replace (drop saved skills, use exactly these; `[]` disables all). Patch form: `{add, replace, remove}` — surgical edit on top of the saved skills. See below. |
 | `examples` | list of objects | Global reference examples. |
 | `kb_ids` | list of strings | Knowledge base IDs. `[]` disables all KBs. |
 | `api_tools` | list of strings | API tool IDs. `[]` disables all tools. |
 | `enrichment_tool_ids` | list of strings | Auto-run-at-start tool IDs. |
 
-**Skill object shape** (matches the playbook skill DB shape minus ids):
+**Skills patch shape** (object form of `skills`):
+
+```json
+{
+  "skills": {
+    "remove": ["legacy-flow"],
+    "replace": [
+      {"name": "refund-flow", "description": "...", "content": "..."}
+    ],
+    "add": [
+      {"name": "english-only", "description": "...", "content": "..."}
+    ]
+  }
+}
+```
+
+Operators are applied in order `remove` → `replace` → `add`. The BE returns **422** for: `remove` / `replace` of an unknown name, `add` of a name that already exists after `remove` ran, or duplicate names within one operator list. (Strict validation — typos surface immediately.) `remove: [X]` + `add: [{name:X, …}]` of the same name **is** allowed.
+
+**Skill object shape** (used in `skills` list form, in `replace`, and in `add`):
 
 ```json
 {
   "name": "english-only",
   "description": "Force English replies regardless of input language",
-  "trigger": "Always",
   "content": "Reply only in English even when the customer writes in another language.",
   "examples": [],
   "order": 0
 }
 ```
+
+Only `name`, `description` and `content` are required. The saved-version skill row also has a `trigger` field — the override endpoint omits it because the agent's system prompt only surfaces `name` + `description` for skill discovery, never `trigger`.
 
 **Semantics:**
 
@@ -381,7 +400,6 @@ POST /playbooks/PB_BASE_ID/active/chat
       {
         "name": "refund-flow",
         "description": "Handle refund requests",
-        "trigger": "User mentions refund",
         "content": "Ask for order id, then check eligibility..."
       }
     ],

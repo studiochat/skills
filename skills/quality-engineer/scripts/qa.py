@@ -168,12 +168,28 @@ def build_playbook_override(
 
     if skills_file:
         skills = _read_json_file(skills_file)
-        if not isinstance(skills, list):
+        # Two accepted shapes, forwarded verbatim to the BE:
+        #   * list[skill] → full replace (drop saved skills, use exactly these).
+        #   * dict with add/replace/remove → surgical patch on top of saved.
+        # Discrimination matches the BE's PlaybookOverride.skills union, so
+        # the file the user authors mirrors the wire shape.
+        if not isinstance(skills, (list, dict)):
             print(
-                f"Error: --skills-file {skills_file} must contain a JSON list of skill objects",
+                f"Error: --skills-file {skills_file} must contain a JSON list (full replace) "
+                "or a patch object with add/replace/remove keys.",
                 file=sys.stderr,
             )
             sys.exit(1)
+        if isinstance(skills, dict):
+            allowed = {"add", "replace", "remove"}
+            unknown = set(skills.keys()) - allowed
+            if unknown:
+                print(
+                    f"Error: --skills-file {skills_file} patch object has unknown keys: "
+                    f"{sorted(unknown)}. Allowed: add, replace, remove.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
         override["skills"] = skills
 
     if examples_file:
