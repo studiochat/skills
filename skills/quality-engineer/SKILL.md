@@ -52,6 +52,11 @@ python3 scripts/qa.py cases delete CASE_ID
 # Trigger an eval run
 python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID [--context '{}']
 
+# Trigger an eval run against UNSAVED instructions / skills (no version bumped)
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
+    --instructions-file ./draft-prompt.md \
+    --skills-file ./draft-skills.json
+
 # List eval runs
 python3 scripts/qa.py runs list PLAYBOOK_BASE_ID
 
@@ -67,6 +72,11 @@ python3 scripts/qa.py runs cancel RUN_ID
 # Chat with an assistant (simulate a conversation)
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hello, I need help"
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Follow up" --conversation-id CONV_ID
+
+# Chat with UNSAVED instructions to iterate quickly (no version bumped)
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hi" \
+    --instructions "Reply in English. Be very concise." \
+    --skills-file ./draft-skills.json
 ```
 
 ## Full API Reference
@@ -125,6 +135,176 @@ assistant agent, simulating a real user with specific attributes:
 ```
 
 The assistant sees this context exactly as it would in a real conversation.
+
+---
+
+## Iterating without saving: playbook overrides
+
+The QA pain point: every prompt or skill change normally bumps a saved playbook version, which means a version-history littered with throwaway revisions and an approval step in front of every iteration. The `--instructions`, `--skills-file`, `--examples-file`, `--kb-ids`, and `--api-tools` flags on `chat` and `runs create` let you test in-memory replacements **without persisting anything**.
+
+### When to use
+
+- Iterating on the system prompt — try a new tone, a new rule, a new fallback — and see how the assistant responds turn-by-turn.
+- Validating a draft skill (casuística) end-to-end against the full eval suite before promoting it.
+- A/B comparing two prompt variants without bumping the active version.
+- Reproducing a production conversation with a tweaked prompt to confirm the fix.
+
+### Override semantics
+
+| Flag | Replaces… |
+|---|---|
+| `--instructions TEXT` / `--instructions-file FILE` | Main playbook instructions (the free-text content). |
+| `--skills-file FILE` | The full set of skills. Pass `[]` to disable all skills. |
+| `--examples-file FILE` | Global reference examples. |
+| `--kb-ids id1,id2` | Knowledge base IDs (pass `""` to disable all KBs). |
+| `--api-tools t1,t2` | API tool IDs (pass `""` to disable all tools). |
+
+Rules:
+
+- **Each flag is independent** — omit a flag and the saved playbook field stays.
+- **Replace, not merge** — lists are swapped wholesale; there's no union.
+- **Conversations are forced into preview + eval mode** — overridden runs never count toward production analytics, the sticky-model cache, or chatlogs.
+- **No version is created** — the saved playbook is untouched; if you like the result, edit and save it through the normal flow.
+- Requires admin or API-key authentication (the same `sbs_` / `kps_` tokens the skill already uses).
+
+### Skills file shape
+
+`--skills-file` accepts **two shapes** — pick the one that matches what you want to do.
+
+#### 1. Full replace (list of skill objects)
+
+Drop the saved playbook's skills entirely and use exactly these:
+
+```json
+[
+  {
+    "name": "refund-flow",
+    "description": "Handle refund requests with order id verification",
+    "content": "First ask for the order id. Then check eligibility..."
+  },
+  {
+    "name": "english-only",
+    "description": "Force English replies",
+    "content": "Reply only in English regardless of customer language."
+  }
+]
+```
+
+Pass `[]` to disable **all** skills.
+
+#### 2. Surgical patch (object with `add` / `replace` / `remove`)
+
+Keep most of the saved skills and only modify a few. Operators are applied in order: `remove` → `replace` → `add`:
+
+```json
+{
+  "remove": ["legacy-skill-a", "legacy-skill-b"],
+  "replace": [
+    {
+      "name": "refund-flow",
+      "description": "Refund handling, tightened policy",
+      "content": "ASK for order id BEFORE confirming any refund..."
+    }
+  ],
+  "add": [
+    {
+      "name": "english-only",
+      "description": "Force English replies",
+      "content": "Reply only in English regardless of customer language."
+    }
+  ]
+}
+```
+
+**Strict-validation rules** (the BE returns `422` if violated, before any LLM call):
+- `remove` of a name that isn't on the saved playbook → 422.
+- `replace` of a name that isn't on the saved playbook → 422 (use `add` instead).
+- `add` of a name that already exists (after `remove` ran) → 422 (use `replace` instead).
+- Duplicate names within a single operator list → 422.
+
+`remove: [X]` + `add: [{name:X, ...}]` of the same name **is** allowed — after `remove` drops the saved row, the slot is free for `add`.
+
+#### Skill object shape
+
+Both shapes share the same skill object shape (matches `SkillOverrideInput` on the BE). Note: only the fields the LLM actually reads during skill discovery are accepted here — `trigger` lives on the saved-version skill row but is never injected into the system prompt, so the override endpoint omits it.
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | Unique identifier (kebab-case recommended). Matched by name in `replace`/`remove`. |
+| `description` | yes | Short summary shown to the agent during skill discovery. |
+| `content` | yes | Full instructions. Macros like `{{ kb(<id>) }}` and `{{ tool(<id>) }}` are expanded — the referenced KB / API tool must already exist in the project (the override doesn't create them). |
+| `examples` | no | Optional list of reference conversation examples. |
+| `order` | no | Display/listing order. Auto-assigned if omitted. |
+
+### Examples
+
+```bash
+# Quick prompt tweak via inline flag
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hi" \
+    --instructions "Always reply in English, be terse."
+
+# Full file-based override for chat
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "I want a refund" \
+    --instructions-file ./draft-prompt.md \
+    --skills-file ./draft-skills.json \
+    --examples-file ./draft-examples.json \
+    --conversation-id qa_iter_001
+
+# Disable all skills to test the bare prompt
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hello" \
+    --skills-file <(echo '[]')
+
+# Surgically modify the saved skills (patch shape)
+# ./skills-patch.json:
+#   { "remove": ["old-flow"], "add": [{"name": "english-only", ...}] }
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hello" \
+    --skills-file ./skills-patch.json
+
+# Run the full eval suite against an unsaved prompt
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID \
+    --playbook-id PB_VERSION_ID \
+    --instructions-file ./candidate-prompt.md
+```
+
+### Wire shape
+
+Both endpoints accept a `playbook_override` object on the request body. The CLI builds it for you, but if you need to call the API directly:
+
+**Full-replace form (list-shape skills):**
+
+```json
+{
+  "conversation_id": "qa_iter_001",
+  "user_message": "...",
+  "playbook_override": {
+    "content": "...full instructions...",
+    "skills": [
+      {"name": "...", "description": "...", "content": "..."}
+    ],
+    "examples": [],
+    "kb_ids": ["kb-uuid-1"],
+    "api_tools": []
+  }
+}
+```
+
+**Surgical-patch form (object-shape skills):**
+
+```json
+{
+  "conversation_id": "qa_iter_001",
+  "user_message": "...",
+  "playbook_override": {
+    "skills": {
+      "remove": ["old-flow"],
+      "replace": [{"name": "refund-flow", "description": "...", "content": "..."}],
+      "add": [{"name": "english-only", "description": "...", "content": "..."}]
+    }
+  }
+}
+```
+
+Any subset of these keys is valid — omitted keys keep the saved playbook value.
 
 ---
 
