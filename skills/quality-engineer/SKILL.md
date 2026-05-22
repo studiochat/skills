@@ -119,7 +119,7 @@ python3 scripts/qa.py cases create PLAYBOOK_BASE_ID --body '{
   "max_turns": 5,
   "assertions": [
     {"criteria": "The assistant does not fabricate an order status"},
-    {"type": "handoff", "name": "handoff"}
+    {"type": "handoff"}
   ],
   "tool_mocks": {
     "lookup_order": {"match_kind": "any", "error": "Order not found"}
@@ -762,27 +762,205 @@ The scenario tells the **simulated user** how to behave. Write it from the user'
 - Include constraints: "the user is impatient," "the user doesn't have their order number"
 - Keep it focused — one scenario per case
 
-### Assertion Guidelines
+### Assertion types — pick the right tool for each check
 
-Assertions are **evaluated by an LLM** after the conversation. Write them as clear, verifiable statements:
+Assertions live on `EvalCase.assertions` as a list of typed objects. There are **two families**:
 
-- Good: "The assistant mentions the 30-day refund policy"
-- Good: "The assistant asks for the order number before proceeding"
-- Bad: "The assistant is helpful" (too vague)
-- Bad: "Response time is under 2 seconds" (can't be evaluated from conversation text)
+- **Text** (`type: "text"`) — graded by the LLM judge. Use for free-form claims about what the assistant said.
+- **Structured** (everything else) — graded deterministically by walking `turn.events` and `turn.tool_calls`. No LLM call. Faster, cheaper, and immune to judge flakiness — prefer these whenever the check fits a structured shape.
 
-### Tag Assertions
+The `--judge-model` flag affects only text assertions. Structured assertions ignore it.
 
-Use `assertion_tags` to verify the assistant applied specific tags during the conversation.
-For example, if your assistant is configured to tag billing conversations with "billing":
+> **Picking the right type**: every time you reach for `text` to check something the assistant *did* (called a tool, handed off, set a priority, applied a tag, wrote a private note), there's a structured variant that does it deterministically. Use `text` only for what the assistant *said* (tone, content of the message, that it mentioned a specific policy).
+
+#### `text` — LLM-as-judge
+
+```json
+{"type": "text", "criteria": "The assistant mentions the 30-day refund policy"}
+```
+
+`type` defaults to `text`, so the legacy short form still works:
+
+```json
+{"criteria": "The assistant asks for the order number before proceeding"}
+```
+
+Write the criteria as a clear, verifiable statement:
+
+- ✅ "The assistant mentions the 30-day refund policy"
+- ✅ "The assistant asks for the order number before proceeding"
+- ❌ "The assistant is helpful" (too vague)
+- ❌ "Response time is under 2 seconds" (not evaluable from text)
+
+#### `tool_called` — a specific tool was invoked
+
+```json
+{"type": "tool_called", "name": "search_knowledge_base", "min_count": 1}
+```
+
+Optional `args_match` narrows the match to calls whose `arguments` dict is a superset of the given keys/values:
 
 ```json
 {
-  "assertion_tags": ["billing"]
+  "type": "tool_called",
+  "name": "SLACK_SEND_MESSAGE",
+  "args_match": {"channel": "#alerts"},
+  "min_count": 1
 }
 ```
 
-The case passes the tag assertion only if the assistant actually applied the "billing" tag.
+`min_count` defaults to 1 — bump it when you need to assert "called at least N times" (e.g., retrieved KB info twice during a long flow).
+
+#### `tool_not_called` — a tool was never invoked
+
+```json
+{"type": "tool_not_called", "name": "process_refund"}
+```
+
+With `args_match`, narrows to "must never be called *with these args*" (other calls to the same tool are ignored):
+
+```json
+{
+  "type": "tool_not_called",
+  "name": "send_email",
+  "args_match": {"to": "ceo@example.com"}
+}
+```
+
+Useful for negative tests: "the agent must NOT email the CEO."
+
+#### `tool_call_sequence` — tools fired in a specific order
+
+```json
+{
+  "type": "tool_call_sequence",
+  "names": ["lookup_order", "check_refund_eligibility", "process_refund"],
+  "strict": false
+}
+```
+
+`strict: false` (default) means the listed tools must appear in order but other tool calls may interleave. `strict: true` means they must appear **contiguously** in the exact order — useful when you need to lock down "no extra calls between A and B."
+
+#### `handoff` — *some* handoff event was emitted (mode-agnostic)
+
+```json
+{"type": "handoff"}
+```
+
+Matches either `handoff_agent` or `handoff_team`. **Standalone accounts** only ever see "the agent gave up" with no agent/team distinction — this is the only handoff assertion that makes sense there. **Kaption accounts** also have the more specific variants below.
+
+#### `handoff_to_agent` — handoff to a specific agent (Kaption)
+
+```json
+{"type": "handoff_to_agent", "agent_id": 162}
+```
+
+Or `"any"` for "any specific agent" (i.e., assert that a `handoff_agent` event fired with *some* agent_id):
+
+```json
+{"type": "handoff_to_agent", "agent_id": "any"}
+```
+
+#### `handoff_to_team` — handoff to a specific team (Kaption)
+
+```json
+{"type": "handoff_to_team", "team_id": 7}
+```
+
+#### `no_handoff` — assert the agent did NOT hand off
+
+```json
+{"type": "no_handoff"}
+```
+
+Matches both agent and team handoffs. Useful when the playbook is supposed to resolve the issue end-to-end.
+
+#### `priority_set` — `priority` event with a specific value
+
+```json
+{"type": "priority_set", "value": "urgent"}
+```
+
+`value` must be one of `urgent | high | medium | low`. Pairs well with playbooks that triage by severity.
+
+#### `tag_added` — a `label` event added a specific tag
+
+```json
+{"type": "tag_added", "tag": "billing"}
+```
+
+> The agent emits these as `label` events internally, but the user-facing term is "tag" — this assertion uses `tag_added` for consistency with the rest of the eval surface.
+
+There's also a **legacy** `assertion_tags: ["billing", "escalation"]` field on the case body that asserts a list of tags in one shot. It still works for backwards compatibility, but new cases should prefer one `tag_added` assertion per tag — they show up individually in the diff view and per-assertion result rows.
+
+#### `private_note_contains` — a private note's content contains a substring
+
+```json
+{
+  "type": "private_note_contains",
+  "substring": "asignar a Lautaro",
+  "case_insensitive": true
+}
+```
+
+Useful when the playbook is supposed to write specific context into a private note for the next human agent. `case_insensitive` defaults to `true`.
+
+### Combined examples
+
+A single case can mix text and structured assertions freely. Structured assertions run first (deterministic, no LLM cost); text assertions run after.
+
+```json
+{
+  "name": "refund-flow-eligible",
+  "scenario": "Customer with order ORD-12345 (5 days old) wants a refund.",
+  "termination": "The assistant confirms the refund will be processed",
+  "max_turns": 6,
+  "assertions": [
+    {"type": "tool_call_sequence", "names": ["lookup_order", "process_refund"]},
+    {"type": "tool_called", "name": "process_refund", "args_match": {"order_id": "ORD-12345"}},
+    {"type": "tool_not_called", "name": "human_handoff"},
+    {"type": "priority_set", "value": "low"},
+    {"type": "tag_added", "tag": "refund-completed"},
+    {"criteria": "The assistant confirms the refund amount in the response"}
+  ]
+}
+```
+
+A handoff-on-failure case for a standalone account:
+
+```json
+{
+  "name": "refund-flow-not-eligible-handoff",
+  "scenario": "Customer wants a refund for a 60-day-old order. Policy is 30 days.",
+  "termination": "The assistant escalates to a human",
+  "max_turns": 5,
+  "assertions": [
+    {"type": "handoff"},
+    {"type": "tool_not_called", "name": "process_refund"},
+    {"type": "private_note_contains", "substring": "fuera de política de 30 días"},
+    {"criteria": "The assistant explains the 30-day policy to the customer"}
+  ]
+}
+```
+
+### Picking the right assertion — cheat sheet
+
+| Question | Assertion |
+|---|---|
+| Did the assistant **say** X? | `text` (LLM judge) |
+| Did the assistant **call** tool X? | `tool_called` |
+| Did the assistant **call** tool X with these args? | `tool_called` + `args_match` |
+| Did the assistant **NOT call** tool X? | `tool_not_called` |
+| Did the assistant **NOT call** tool X with these args? | `tool_not_called` + `args_match` |
+| Did tools fire in this order? | `tool_call_sequence` |
+| Did the assistant give up? (standalone) | `handoff` / `no_handoff` |
+| Did the assistant route to agent N? (Kaption) | `handoff_to_agent` |
+| Did the assistant route to team N? (Kaption) | `handoff_to_team` |
+| Did the assistant set conversation priority? | `priority_set` |
+| Did the assistant apply tag X? | `tag_added` |
+| Did the assistant write a private note containing X? | `private_note_contains` |
+
+> **Reminder**: events (`priority`, `label`, `note`, `handoff_*`) cannot be **mocked** with `tool_mocks` because they're not tool calls — they're items in the LLM's structured output. But they CAN be **asserted** with the structured assertions above. The two features are complementary: mocks shape the inputs the agent sees during the run; assertions verify the side effects (events + tool calls) it produced.
 
 ---
 

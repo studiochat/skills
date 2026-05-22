@@ -7,6 +7,7 @@ In paths, `{base_id}` is the playbook base ID (stable across versions).
 ## Contents
 
 - [Create Test Case](#create-test-case)
+- [Assertion Types](#assertion-types)
 - [Batch Create Test Cases](#batch-create-test-cases)
 - [List Test Cases](#list-test-cases)
 - [Get Test Case](#get-test-case)
@@ -42,8 +43,8 @@ Create a single eval test case for a playbook.
 | `termination` | string | Yes | Expected outcome condition |
 | `first_message` | string | No | Exact first message (LLM generates if omitted) |
 | `max_turns` | int | No | Max turns (1-50, default: 10) |
-| `assertions` | array | No | `[{"criteria": "..."}]` — LLM-evaluated criteria |
-| `assertion_tags` | array | No | `["tag1", "tag2"]` — tags the assistant should apply |
+| `assertions` | array | No | List of typed assertion objects — see [Assertion Types](#assertion-types) below for the full discriminated union (`text`, `tool_called`, `tool_not_called`, `tool_call_sequence`, `handoff`, `handoff_to_agent`, `handoff_to_team`, `no_handoff`, `priority_set`, `tag_added`, `private_note_contains`). |
+| `assertion_tags` | array | No | Legacy: `["tag1", "tag2"]` — tags the assistant should apply. Prefer `tag_added` assertions in new cases. |
 | `tool_mocks` | object | No | Stub specific tools with canned responses for this case. See [Tool Mocks](#tool-mocks) below. |
 | `user_context` | object | No | Per-case user context; merges over the run-level `user_context` (case wins). Use for case-specific user attributes or `eval_overrides`. |
 
@@ -83,6 +84,160 @@ Create a single eval test case for a playbook.
 **Exhaustive contract:** once a tool has any rule, every call to that tool during the run MUST match a rule. Unmatched calls fail the run with `no mock matched call #N for tool …` — they do NOT fall through to the real implementation. Always include an `any` catch-all if call counts are uncertain.
 
 Tools not listed in `tool_mocks` are unaffected — they call the real implementation.
+
+---
+
+## Assertion Types
+
+`EvalCase.assertions` is a list of typed objects following a discriminated union on the `type` field. Two families:
+
+- **`text`** — graded by the LLM judge (uses `--judge-model`).
+- **All other types** — graded **deterministically** by walking `turn.events` and `turn.tool_calls`. No LLM call, no judge-model cost, no flakiness. Prefer these whenever the check fits a structured shape.
+
+Legacy short form: a bare `{"criteria": "..."}` (no `type` field) is interpreted as `{"type": "text", "criteria": "..."}`. Both shapes round-trip cleanly.
+
+### Discriminator
+
+```json
+{"type": "text" | "tool_called" | "tool_not_called" | "tool_call_sequence"
+       | "handoff" | "handoff_to_agent" | "handoff_to_team" | "no_handoff"
+       | "priority_set" | "tag_added" | "private_note_contains", ...}
+```
+
+### `text` — LLM-as-judge
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"text"` | No | Defaults to `"text"`. |
+| `criteria` | string | Yes | Free-form claim about what the assistant said, graded by the LLM judge. |
+
+```json
+{"type": "text", "criteria": "The assistant mentions the 30-day refund policy"}
+```
+
+### `tool_called` — a named tool was invoked at least N times
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Tool name (e.g. `search_knowledge_base`, `SLACK_SEND_MESSAGE`). Match exactly what appears in `ToolCallTrace.name`. |
+| `args_match` | object | No | Optional subset filter — every key/value must appear in the call's `arguments` dict. |
+| `min_count` | int | No | Minimum matching invocations (default `1`, must be `≥1`). |
+
+```json
+{"type": "tool_called", "name": "process_refund", "args_match": {"order_id": "ORD-12345"}, "min_count": 1}
+```
+
+### `tool_not_called` — a tool was never invoked
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Tool name that must never appear. |
+| `args_match` | object | No | Narrow to "must never be called *with these args*". Other calls to the same tool are ignored. |
+
+```json
+{"type": "tool_not_called", "name": "send_email", "args_match": {"to": "ceo@example.com"}}
+```
+
+### `tool_call_sequence` — tools fired in a specific order
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `names` | array | Yes | Ordered list of tool names (min 1). |
+| `strict` | bool | No | `false` (default): the names must appear in order but other calls may interleave. `true`: names must appear **contiguously** in exact order. |
+
+```json
+{"type": "tool_call_sequence", "names": ["lookup_order", "check_eligibility", "process_refund"], "strict": false}
+```
+
+### `handoff` — *some* handoff event was emitted (mode-agnostic)
+
+No additional fields. Matches either `handoff_agent` or `handoff_team`. Standalone-account UI surfaces only this variant.
+
+```json
+{"type": "handoff"}
+```
+
+### `handoff_to_agent` — handoff to a specific agent (Kaption)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `agent_id` | int \| `"any"` | Yes | Specific agent id, or `"any"` to assert "any specific agent handoff fired." |
+
+```json
+{"type": "handoff_to_agent", "agent_id": 162}
+```
+
+### `handoff_to_team` — handoff to a specific team (Kaption)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `team_id` | int | Yes | Team id to assert handoff for. |
+
+```json
+{"type": "handoff_to_team", "team_id": 7}
+```
+
+### `no_handoff` — assert no handoff fired
+
+No additional fields. Matches both agent and team handoffs.
+
+```json
+{"type": "no_handoff"}
+```
+
+### `priority_set` — a `priority` event set a specific value
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `value` | `"urgent" \| "high" \| "medium" \| "low"` | Yes | Expected priority value. |
+
+```json
+{"type": "priority_set", "value": "urgent"}
+```
+
+### `tag_added` — a `label` event added a specific tag
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tag` | string | Yes | Expected tag name. |
+
+```json
+{"type": "tag_added", "tag": "billing"}
+```
+
+> The agent emits these as `label` events internally; this assertion uses the user-facing "tag" terminology.
+
+### `private_note_contains` — a `note` event's content contains a substring
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `substring` | string | Yes | Substring that must appear in at least one private note. |
+| `case_insensitive` | bool | No | Default `true`. |
+
+```json
+{"type": "private_note_contains", "substring": "asignar a Lautaro", "case_insensitive": true}
+```
+
+### Combining text + structured
+
+A case can mix freely. Structured assertions are evaluated first (deterministic, free); text assertions hit the LLM judge after.
+
+```json
+{
+  "name": "refund-flow-eligible",
+  "scenario": "Customer with order ORD-12345 (5 days old) wants a refund.",
+  "termination": "The assistant confirms the refund will be processed",
+  "max_turns": 6,
+  "assertions": [
+    {"type": "tool_call_sequence", "names": ["lookup_order", "process_refund"]},
+    {"type": "tool_called", "name": "process_refund", "args_match": {"order_id": "ORD-12345"}},
+    {"type": "tool_not_called", "name": "human_handoff"},
+    {"type": "priority_set", "value": "low"},
+    {"type": "tag_added", "tag": "refund-completed"},
+    {"criteria": "The assistant confirms the refund amount in its reply"}
+  ]
+}
+```
 
 ---
 
