@@ -2,8 +2,9 @@
 name: builder
 description: >
   Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
-  API tools, alerts, schedules, and trending topics. Use when asked to create, update, or manage
-  any aspect of an assistant's configuration. Covers all CRUD operations via the Studio Chat API.
+  API tools, toolkit actions (Slack), alerts, schedules, and trending topics. Use when asked
+  to create, update, or manage any aspect of an assistant's configuration, including wiring up the
+  template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
 ---
 
 # Builder
@@ -336,16 +337,27 @@ python3 scripts/api.py \
   -X PUT --body '["password-reset", "refund-process", "billing-inquiry"]'
 ```
 
-### Skill content supports templates
+### Template macros (the "pills")
 
-Skill instructions support the same template macros as playbook instructions:
-- `{{ kb(KB_ID) }}` — Reference a knowledge base for search
-- `{{ tool(TOOL_ID) }}` — Reference an API tool
-- `{{ integration(SLUG) }}` — Reference a Composio/custom integration
-- `{{ composio_tool: TOOL_NAME | Display Name }}` — Reference a specific integration tool
-- `{{ custom_tool: short_name }}` — Reference a configured custom tool
+Skill content and playbook instructions support the **same five** inline macros. They are the only macros the compiler recognizes:
 
-The referenced tools/KBs are registered in the agent even before the skill is loaded, ensuring they're available when needed.
+| Macro | Points at | Object created via |
+|---|---|---|
+| `{{ kb(KB_ID) }}` | a knowledge base the agent can search | [Knowledge Bases](#knowledge-bases) |
+| `{{ tool(TOOL_ID) }}` | a custom HTTP API tool | [API Tools](#api-tools) |
+| `{{ integration(SLUG) }}` | a whole connected toolkit — the agent fills every param | [Toolkit Actions](#toolkit-actions-slack) (connected by the user) |
+| `{{ custom_tool: short_name }}` | one **pre-configured** toolkit action (some params pinned) | [Toolkit Actions](#toolkit-actions-slack) (a tool configuration) |
+| `{{ examples: BLOCK_ID }}` | a reference example block | [Example Blocks](#example-blocks) |
+
+Each referenced KB / tool / toolkit / action is registered in the agent **even before** the skill loads, so it's available the moment the skill fires.
+
+**Two macros require an object to exist first** and are the most common source of "the assistant can't do X": `{{ integration(SLUG) }}` needs the toolkit *connected*, and `{{ custom_tool: short_name }}` needs a *tool configuration* created. See [Toolkit Actions](#toolkit-actions-slack).
+
+**`{{ examples: BLOCK_ID }}` is the ONLY way to add examples** — never paste sample conversations directly into instruction or skill text. See [Example Blocks](#example-blocks).
+
+> **No save-time validation.** A playbook saves fine even if a macro points at something that doesn't exist or a toolkit that isn't connected — at runtime the macro silently degrades to literal text like `[integration:SLACK]` and the action just isn't available (only a log warning). Always confirm the referenced object exists / is connected before writing the macro.
+>
+> There is **no** `{{ composio_tool: … }}` macro (Composio was removed). `{{ integration() }}` resolves only against the built-in custom-toolkit registry described in [Toolkit Actions](#toolkit-actions-slack).
 
 ---
 
@@ -371,6 +383,10 @@ When defining the tag taxonomy (in the instructions and/or a dedicated `tagging`
 ## Example Blocks
 
 Example blocks are reference conversations that show the assistant HOW to communicate — tone, style, personality, containment strategies, and approach. They are inline in the instructions or skills via `{{ examples: BLOCK_ID }}` template macros.
+
+> **Example blocks are THE only way to add examples. Always.** Never write sample conversations, "here's a good reply:", Q→A pairs, or any other verbatim example directly into the instructions or skill text. Every example — without exception — goes into an example block and is referenced with `{{ examples: BLOCK_ID }}`. If you catch yourself typing an example turn inline in `content`, stop and move it into a block.
+>
+> Why: blocks are compiled into structured `<example id="…">` tags the LLM is told to follow and cite (`<<id>>`), they're versioned/immutable for clean rollback, and they keep the instructions readable. Examples pasted raw into the prose get none of that machinery — they read as literal rules, bloat the prompt, and can't be cited or rolled back. When migrating or editing an existing playbook, **move any inline examples you find into blocks** and replace them with the macro.
 
 When compiled, examples are injected into the prompt as `<example id="xxxxx">` tags. The LLM is instructed to follow the style of matching examples and reference them in its response with `<<example_id>>` markers.
 
@@ -576,6 +592,164 @@ python3 scripts/api.py \
     ]
   }'
 ```
+
+A custom API tool is project-owned and self-contained — once created, reference it anywhere with `{{ tool(TOOL_ID) }}`. This is different from **toolkit actions** (below), which depend on a connection the user owns.
+
+---
+
+## Toolkit Actions (Slack)
+
+Some actions — *send a Slack message* — come from **built-in toolkits** that wrap a third-party API. Unlike a KB or an API tool (which the builder creates outright), a toolkit must be **connected by the user** with their own credentials before its actions can be used.
+
+**The builder never connects a toolkit.** Connecting requires the customer's secret (a Slack bot token) or an interactive OAuth flow — that's the user's job, in the UI. The builder's role is to **discover** what's connected and wire the available actions into instructions/skills. If an action you need belongs to a toolkit that isn't connected, **stop and ask the user to connect it first** — don't write the macro and hope.
+
+**Slack has two connection variants — same action, different slug:**
+
+| Slug | How the user connected it | `auth_type` |
+|---|---|---|
+| `SLACK` | Pasted a Slack **bot token** | `api_key` |
+| `SLACK_OAUTH` | Authorized via the **OAuth** popup | `oauth` |
+
+Both expose the same `SLACK_SEND_MESSAGE` action with the same params — only the registry slug differs. In Step 1 check which one is `is_connected: true` and use **that** slug throughout (in `{{ integration(SLUG) }}` and in the metadata paths below). A project typically has one or the other, not both.
+
+> Other toolkits exist in the registry (Intercom, etc.) and follow the same connect → discover → configure pattern, but this section covers **Slack messages** only — the rest will be documented separately.
+
+### The workflow (run this whenever the user asks for "send a Slack message")
+
+When the request is *"when X happens, the assistant should send a Slack message"*, drive this conversation — don't guess the channel, message, or mentions:
+
+1. **Check the connection first.** `GET /custom-toolkits` → is `SLACK` **or** `SLACK_OAUTH` `is_connected: true`?
+   - **Neither connected →** stop. Tell the user Slack isn't connected and ask them to connect it (bot token or OAuth) in the UI, then come back. Do not write the macro.
+   - **Connected →** note the connected slug and its `connected_account_id`, and continue.
+2. **Ask the user three things** (these are the params you'll pin / leave open):
+   - **Where?** Which channel. Fetch the options (`…/metadata/channels`) and let them pick — you pin the channel id.
+   - **What message?** Either a **fixed text** (pin it in `message`) or — more common — the assistant **writes it per-situation** (leave `message` open; you'll describe *how* in the instruction next to the macro).
+   - **Any mention?** If yes, fetch that channel's people (`…/metadata/members?channel=<id>`) and pin the chosen ids in `mentions` (or a special token like `!here`).
+3. **Build the action object.** `POST /tool-configurations` with `tool_slug: "SLACK_SEND_MESSAGE"`, the `connected_account_id` as `toolkit_connection_id`, and `config.params` holding what you pinned (channel, mentions, optionally message). Read the generated `short_name` from the response.
+4. **Reference it with the macro.** Put `{{ custom_tool: <short_name> }}` in the instruction/skill at the spot that describes the situation X — and, if the message is LLM-written, say there how it should be phrased. Confirm the change with the user before saving (every write is confirmed), then re-read to check the `short_name` is spelled exactly.
+
+> When in doubt between the two macros: a **fixed destination** ("always #soporte") → tool configuration + `{{ custom_tool: … }}` (this workflow). The agent should **choose the channel itself** at runtime → `{{ integration(SLUG) }}` instead (Step 2), and skip the tool-configuration.
+
+The rest of this section is the mechanics each step relies on.
+
+### Step 1 — Discover what's available
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-toolkits"
+```
+
+Returns every registry toolkit. For each, the fields that matter:
+
+| Field | Use |
+|---|---|
+| `slug` | What goes in `{{ integration(SLUG) }}` (e.g. `SLACK`). |
+| `is_connected` | **Gate.** `false` ⇒ you cannot use its actions — ask the user to connect it. |
+| `connected_account_id` | The connection id. You pass this as `toolkit_connection_id` when creating a tool configuration. `null` when not connected. |
+| `tools` | The action slugs this toolkit exposes — for Slack, `SLACK_SEND_MESSAGE`. |
+| `tool_params` | Per-action configurable params you can **pin** in a tool configuration. A param with `"metadata_source"` (e.g. Slack `channel`) has its valid values fetched via the metadata endpoint (Step 3). |
+| `auth_type` | `api_key` or `oauth` — informational; either way the user connects it, not you. |
+
+### Step 2 — Pick how to expose the action
+
+There are two macros, and the choice is about **who fills the parameters**:
+
+| Macro | Behaviour | Use when |
+|---|---|---|
+| `{{ integration(SLUG) }}` | Registers the **whole toolkit**; the LLM fills **every** param itself (it picks the Slack channel *and* writes the message). | The agent should decide the target dynamically. |
+| `{{ custom_tool: short_name }}` | Registers **one action with some params pre-locked** (a *tool configuration*). The LLM only fills what's left. | "Send to **#soporte**" — the channel is fixed and you don't want the LLM choosing it. |
+
+`{{ integration(SLUG) }}` needs nothing beyond the connection — drop it in the instructions/skill and you're done. `{{ custom_tool: … }}` needs a tool configuration first (Step 3).
+
+### Step 3 — Create a tool configuration (for `{{ custom_tool: … }}`)
+
+A tool configuration is a saved instance of one action with chosen params pinned. The backend generates a stable `short_name` you then reference in the macro.
+
+**3a. (If the action has a `metadata_source` param)** fetch the valid values so you pin a real id, not a guess. The endpoint is `GET /custom-toolkits/{SLUG}/metadata/{metadata_source}` and it returns a list of `{id, name}` options:
+
+```bash
+# list the Slack channels the connected bot can post to
+# (use SLACK_OAUTH instead of SLACK if that's the connected variant)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-toolkits/SLACK/metadata/channels"
+```
+
+**Dependent params (`options_depend_on`).** Some params can only be resolved *after* another is chosen — their `tool_params` entry has an `options_depend_on` key. You must pass the parent value as a **query param** or you get an empty list back. The Slack `mentions` param depends on `channel` (`"options_depend_on": "channel"`), so to list the people you can @-mention you pass the chosen channel id:
+
+```bash
+# members of a SPECIFIC channel (omit ?channel and the backend returns [])
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/custom-toolkits/SLACK/metadata/members" \
+  --params channel=C0123456789
+```
+
+So the order for a Slack pill is: fetch `channels` → pick a channel id → fetch `members?channel=<that id>` → pick the member ids to mention.
+
+(The metadata endpoint only works once the toolkit is connected — it reads the stored credentials. If it errors with a missing-scope hint, the user's Slack connection lacks a scope — tell them; you can't fix it from here.)
+
+**Which params to pin** — look at each entry in the action's `tool_params` (Step 1). For `SLACK_SEND_MESSAGE` there are three: `channel`, `mentions`, `message`.
+
+- `"llm_decideable": false` (Slack `channel` and `mentions`) → you **must** pin it in `config.params`. The LLM is not allowed to choose it.
+- no `llm_decideable` flag (Slack `message`) → the LLM fills it at runtime. You *can* still pin it to lock it, including to a context value via a `{{deps.…}}` template.
+- **Value format for `select` params**: pin the **id** (from the metadata call), not the label. `"ID:Label"` also works — the backend keeps the part before the first `:`. So `"C0123456789"` and `"C0123456789:#soporte"` are equivalent.
+
+Any param you pin disappears from what the LLM sees; everything else stays in the tool's schema for the LLM to fill.
+
+**3b. Create the configuration.** `toolkit_connection_id` is the `connected_account_id` from Step 1.
+
+*Example — send a Slack message to a fixed channel, @-mentioning specific people* (LLM only writes the text):
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/tool-configurations" \
+  -X POST --body '{
+    "tool_slug": "SLACK_SEND_MESSAGE",
+    "toolkit_connection_id": "CONNECTED_ACCOUNT_ID_FROM_STEP_1",
+    "display_name": "Notify soporte + oncall",
+    "config": {
+      "params": {
+        "channel": "C0123456789",
+        "mentions": "U0ABC123,U0DEF456"
+      }
+    }
+  }'
+```
+
+`mentions` is a comma-separated list of Slack user ids (from the `members` metadata of that channel) and/or the special tokens `!here` / `!channel` / `!everyone`. The backend encodes them into notifying `<@U…>` / `<!here>` sequences at send time. The `tool_slug` stays `SLACK_SEND_MESSAGE` for both connection variants.
+
+**Don't construct the `short_name` yourself.** The backend generates it (slugified `display_name` + a random suffix) and returns it in the create response, e.g.:
+
+```json
+{ "id": "…", "short_name": "notify_soporte_oncall_a1b2c", "tool_slug": "SLACK_SEND_MESSAGE", … }
+```
+
+Read `short_name` from that response — that exact string is what goes in the macro.
+
+**3c. Reference it** in instructions or a skill:
+
+```
+When the customer reports an outage, post a heads-up with {{ custom_tool: notify_soporte_oncall_a1b2c }}.
+```
+
+### Managing tool configurations
+
+```bash
+# List existing configs (reuse before creating duplicates)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations"
+
+# Update the pinned params (short_name stays stable)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID" \
+  -X PUT --body '{"config": {"params": {"channel": "C0999999999"}}}'
+
+# Delete a config (do this before the user can disconnect the toolkit —
+# a connection with live tool configurations cannot be disconnected)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID" -X DELETE
+```
+
+### Checklist before writing a toolkit macro
+
+1. `GET /custom-toolkits` → is the toolkit `is_connected: true`? If not, **ask the user to connect it** and stop.
+2. Whole-toolkit, LLM picks the target → `{{ integration(SLUG) }}`. Done.
+3. Fixed target → create a tool configuration (pin params, resolving ids via the metadata endpoint) → reference its `short_name` with `{{ custom_tool: short_name }}`.
+4. Re-read the saved instructions to confirm the macro is spelled exactly as the slug / short_name (there's no save-time validation to catch a typo).
 
 ---
 
