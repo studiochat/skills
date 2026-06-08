@@ -3,8 +3,12 @@ name: quality-engineer
 description: >
   Test and evaluate AI assistant behavior. Create test cases, run evaluations,
   analyze results, simulate conversations, and compare playbook versions.
+  Also the end-to-end loop to debug and fix incorrect assistant behaviour
+  starting from a conversation ID: root-cause it, validate a fix via overrides
+  without saving a version, hand off to the human, and add regression evals.
   Use when asked to test an assistant, create QA scenarios, run evals,
-  check assertion pass rates, or verify assistant behavior.
+  check assertion pass rates, verify assistant behavior, or investigate a
+  conversation where the assistant misbehaved.
 ---
 
 # Quality Engineer
@@ -36,13 +40,41 @@ API keys are available by request from the Studio Chat team at hey@studiochat.io
 
 ## QA Practice Workflow (read this first)
 
-The typical request looks like: **"se quejaron de tal ejemplo X — investigá y arreglá"**. The skill is built around that flow: reproduce the complaint, understand what drove the behaviour, fix it via in-memory overrides, validate, and only then persist a regression test.
+The typical request looks like: **"se quejaron de la conversación X — investigá y arreglá"**. The skill is built around that loop:
 
-### Step 1 — Understand the complaint (cross-skill: data-expert)
+```
+Complaint → Root cause → Validated fix → New version (applied by the human) → Eval coverage
+```
 
-Before touching the assistant: find the actual conversation the customer is complaining about. The [data-expert](../data-expert/SKILL.md) skill is the right tool for this — it knows how to query the conversations API, download a specific conversation, and pull the messages + events + tool calls that happened in production. Get the conversation_id, the playbook version that was active, and the user context that was passed in. Don't try to diagnose from a screenshot or a vague summary — read what actually happened.
+Reproduce the complaint, understand what drove the behaviour, fix it via in-memory overrides, hand the validated fix to the human (who applies the new version), and close the loop with regression evals.
 
-### Step 2 — Build the mental model
+There are four **user checkpoints** where you MUST stop and interact — pinning down the incorrect behaviour (Step 3), feedback on the proposed fix (Step 5), the mock question (Step 6), and waiting for the human to apply the new version (Step 8) — plus the full-suite offer at the end (Step 9). Don't barrel through them.
+
+### Step 1 — Pull the full conversation (cross-skill: data-expert)
+
+Everything starts from a **conversation ID** where the assistant did something wrong. Before touching the assistant, download the WHOLE conversation — the [data-expert](../data-expert/SKILL.md) skill is the right tool for this (see its conversation deep-dive patterns). You need:
+
+- every message, event (`label` / `note` / `handoff_*` / `priority`) and tool call with arguments + results
+- the **playbook version** that was active
+- the **model** that served the conversation (sticky models / A/B splits mean different conversations may run different models — you'll need this in Step 4)
+- the **user_context** that was passed in
+
+Don't try to diagnose from a screenshot or a vague summary — read what actually happened.
+
+### Step 2 — Pull the assistant as it was (cross-skill: builder)
+
+Download the full content of the **exact playbook version that handled the conversation** — not the latest one: instructions, skills (casuísticas), KB list, api_tools. The [builder](../builder/SKILL.md) skill covers playbook version management. Diagnosing against the wrong version is a classic trap — the instruction you're reading may not have existed yet, or the bug may already be fixed.
+
+### Step 3 — Pin down the incorrect behaviour (USER CHECKPOINT if unclear)
+
+This step must end with explicit agreement on **what exactly the assistant did wrong**.
+
+- If the user already said it ("prometió un reembolso fuera de política"), confirm it by pointing at the exact turn(s) in the conversation.
+- If they didn't, build hypotheses from the transcript and **ask with hints**: «¿Qué fue lo que pasó acá? ¿Te quejás de que prometió X, o de que no derivó cuando pasó Y?» — offer the 2-3 most plausible candidates you found.
+
+Don't move forward on a guess: the rest of the workflow optimizes for making this specific behaviour not happen again.
+
+### Step 4 — Root-cause: explain WHY it behaved that way
 
 To know **why** the assistant did what it did, you need to understand how Studio Chat assembles the agent at runtime:
 
@@ -55,9 +87,28 @@ To know **why** the assistant did what it did, you need to understand how Studio
 | **Examples** | Reference conversations the agent learns from. | Stored on the playbook; injected into the system prompt. |
 | **Enrichment tools** | Run BEFORE the agent's first turn (e.g. fetch user profile, lookup order). Their result lands in `context.enrichment`. | Configured via `enrichment_tool_ids`; not mockable through `tool_mocks`. |
 
-Whatever the assistant did wrong, the root cause lives in one (or a few) of these layers. The triage question is: was the instruction wrong? Was a skill missing or loading the wrong content? Was the KB result irrelevant? Did a tool return unexpected data? Use `qa.py chat --verbose` to see the **full picture** of each turn (see Step 4 below).
+Whatever the assistant did wrong, the root cause lives in one (or a few) of these layers. With the conversation (Step 1) and the assistant content (Step 2) side by side, classify it:
 
-### Step 3 — REQUIRED: ask the user what to mock before chatting / before any eval run
+| Root cause | What it looks like | Typical fix |
+|---|---|---|
+| **Wrong instruction** | An instruction/skill explicitly drives the bad behaviour (or forbids the right one). | Correct the instruction text. |
+| **Misinterpreted instruction** | The instruction exists but is ambiguous, contradicts another one, or the **model** that served the conversation (Step 1) is too weak to follow it reliably. | Disambiguate the wording, resolve the contradiction, or revisit the model choice. |
+| **Missing instruction** | Nothing covers the scenario, so the model fell back to its **native behaviour** (over-helpful, invents policy, answers out of scope). | Add the missing specificity — an instruction or a new casuística. |
+| **Wrong layer** | Instructions are fine but: the skill description didn't trigger `load_skill`, the KB search returned irrelevant passages, or a tool returned unexpected data. | Fix the skill description / KB content / tool — not the prompt. |
+
+Quote the exact instruction(s) — or their absence — that explain the behaviour. "The assistant was rude" is not a root cause; "skill `tone-formal` never loaded because its description only mentions invoicing" is. Use `qa.py chat --verbose` to see the **full picture** of each turn (see Step 7 below).
+
+### Step 5 — Propose the fix and get feedback (USER CHECKPOINT)
+
+Design the improvement and present it to the user BEFORE iterating:
+
+- **what changes** — which instruction / which skill / which KB, as a minimal diff
+- **why** it addresses the root cause from Step 4
+- **regression risk** — which other behaviours share the instructions/skills you're touching
+
+Keep the diff minimal: broad rewrites are how regressions sneak in. Then wait for feedback — the user often knows constraints that aren't visible in the data (business rules, upcoming changes, tone preferences).
+
+### Step 6 — REQUIRED: ask the user what to mock before chatting / before any eval run
 
 **Before you chat with the assistant for the first time and before you trigger any eval run, you MUST ask the user whether any tools should be mocked.** This is not optional. Reasons:
 
@@ -78,12 +129,16 @@ Example prompt to the user:
 
 If the user says "ninguna, dale así nomás" — proceed without mocks. But don't skip the question.
 
-### Step 4 — Reproduce + iterate via chat with overrides + mocks
+### Step 7 — Reproduce + iterate via chat with overrides + mocks
+
+**NEVER create or save a playbook version to test a hypothesis.** All iteration happens through the chat endpoint's in-memory `playbook_override` — `--instructions` / `--instructions-file`, `--skills-file` (full replace or surgical patch), `--examples-file`, `--kb-ids`, `--api-tools` (see [Iterating without saving: playbook overrides](#iterating-without-saving-playbook-overrides)). Saving versions to test pollutes the version history with throwaway revisions; the only version that gets created in this whole workflow is the final one, applied by the human in Step 8.
+
+First reproduce the bad behaviour **as-is** (no instruction/skill overrides — only the agreed mocks) to prove you can trigger it. Then apply the fix from Step 5 via `--instructions` / `--skills-file` and re-simulate the original scenario (same user_context, same mocked conditions) until the bad behaviour is **gone**.
 
 ```bash
-# Reproduce the complaint exactly. Override the instructions OR skills if
-# you already have a hypothesis about the fix; mock the tools that drove
-# the failing behaviour.
+# Reproduce the complaint exactly. Override the instructions OR skills
+# once you're testing the fix; mock the tools that drove the failing
+# behaviour.
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID \
   --message "Quiero un reembolso del pedido ORD-99999" \
   --conversation-id qa_repro_001 \
@@ -100,51 +155,64 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID \
 | **Citations** | Which KB articles the agent actually quoted. If the assistant cites the wrong article, either the article content is wrong or the search ranking is. |
 | **Explanation** | Agent's own reasoning summary. Useful for catching subtle path choices ("decided to escalate because user asked twice"). |
 
-Iterate by tweaking `--instructions` / `--skills-file` / `--tool-mocks-file` until the fix works. Nothing is persisted — no version bump, no chatlog pollution.
+Iterate by tweaking `--instructions` / `--skills-file` / `--tool-mocks-file` until the fix works. Nothing is persisted — no version bump, no chatlog pollution. Once the bad behaviour is reliably gone, move to Step 8.
 
-### Step 5 — Dry-run a candidate eval case (optional but recommended)
+### Step 8 — Hand off: the human applies the new version (USER CHECKPOINT)
 
-Before persisting a new test case, validate the case definition itself with `qa.py dry-run start`. This runs the simulator + judge ONCE against an unsaved `EvalCaseCreate` payload (with the same `playbook_override` if you're still iterating on the variant). Catches problems like a too-vague `termination` that never fires, or an assertion the LLM judge can't grade. Nothing is written to `eval_cases` or `eval_runs`.
+**This skill never saves a new playbook version — not via the API, not via the builder skill.** Creating the version is a human-in-the-loop gate.
 
-### Step 6 — Persist the case + run only it
+When the fix is validated, deliver the final content ready to apply:
 
-Once the fix works and the case definition is sound, save it and re-run **just that case** against the variant (or against the new saved playbook version, if you've promoted the override).
+- the full updated instructions (if they changed), and/or
+- each changed/added skill as `name` + `description` + `content`
 
-```bash
-# Save the case
-python3 scripts/qa.py cases create PLAYBOOK_BASE_ID --body '{
-  "name": "refund-order-not-found-handoff",
-  "scenario": "Customer asks for a refund for an order that the lookup API returns as not-found.",
-  "termination": "The assistant escalates to a human agent",
-  "max_turns": 5,
-  "assertions": [
-    {"criteria": "The assistant does not fabricate an order status"},
-    {"type": "handoff"}
-  ],
-  "tool_mocks": {
-    "lookup_order": {"match_kind": "any", "error": "Order not found"}
-  }
-}'
+The user applies the changes in the Studio Chat UI, which creates the new version. **Wait for explicit confirmation that the new version is live and get the new version ID** — you need it for Step 9. Don't author eval runs against the old version assuming the fix "will be there".
 
-# Run only this case (ignores is_enabled — works even on disabled cases
-# while you're still iterating)
-python3 scripts/qa.py runs create PLAYBOOK_BASE_ID \
-  --playbook-id VERSION_ID \
-  --case-ids NEW_CASE_ID
-```
+### Step 9 — Close the loop with evals
 
-The case carries its own `tool_mocks` so future runs reproduce the exact failure mode deterministically without you having to specify mocks again.
+Scale coverage to the severity / scope of the fix: a narrow fix gets one regression case; a fix touching a shared instruction or several flows gets a case per affected behaviour.
+
+1. **Author the case(s)** — a scenario replicating the complaint, a `termination`, structured assertions for what must (not) happen, and the same `tool_mocks` you used to reproduce, so future runs are deterministic.
+2. **Dry-run the definition** (optional but recommended) — `qa.py dry-run start` validates the case is gradable before persisting (see [Dry-running a candidate case](#dry-running-a-candidate-case-no-persistence)).
+3. **Persist + run only the new case(s)** against the new version — no overrides now: the fix is saved, test the real thing.
+
+   ```bash
+   # Save the case
+   python3 scripts/qa.py cases create PLAYBOOK_BASE_ID --body '{
+     "name": "refund-order-not-found-handoff",
+     "scenario": "Customer asks for a refund for an order that the lookup API returns as not-found.",
+     "termination": "The assistant escalates to a human agent",
+     "max_turns": 5,
+     "assertions": [
+       {"criteria": "The assistant does not fabricate an order status"},
+       {"type": "handoff"}
+     ],
+     "tool_mocks": {
+       "lookup_order": {"match_kind": "any", "error": "Order not found"}
+     }
+   }'
+
+   # Run only this case against the NEW version (ignores is_enabled —
+   # works even on disabled cases while you're still iterating)
+   python3 scripts/qa.py runs create PLAYBOOK_BASE_ID \
+     --playbook-id NEW_VERSION_ID \
+     --case-ids NEW_CASE_ID
+   ```
+
+4. **Offer a full-suite run (USER CHECKPOINT)** — once the new case(s) pass, offer to run the whole eval suite against the new version (`runs create` without `--case-ids`) to catch regressions elsewhere. It costs time and tokens, so it's the user's call — but always offer.
 
 ### Cheat sheet — which mechanism for which question
 
 | Question | Mechanism |
 |---|---|
 | "What did the assistant actually do in prod?" | data-expert skill — pull the real conversation |
+| "What did the assistant's config look like back then?" | builder skill — pull that exact playbook version |
 | "Does changing the prompt fix it?" | `qa.py chat --instructions ...` |
 | "Does a different skill fire?" | `qa.py chat --skills-file ...` |
 | "What does the assistant do when this tool returns X?" | `qa.py chat --tool-mocks-file ...` |
 | "Is my new case definition gradable?" | `qa.py dry-run start --case ...` |
-| "Did the fix pass without breaking the rest?" | `qa.py runs create` (no `--case-ids`) |
+| "How does the fix get shipped?" | You don't ship it — the human applies the new version in the UI (Step 8) |
+| "Did the fix pass without breaking the rest?" | `qa.py runs create` (no `--case-ids`) — offer it after every fix |
 | "Just re-run THIS one case quickly" | `qa.py runs create --case-ids ID` |
 
 ---
@@ -318,7 +386,7 @@ python3 scripts/qa.py dry-run status $DRY_RUN_ID
 python3 scripts/qa.py dry-run cancel $DRY_RUN_ID
 ```
 
-If the dry-run passes and the conversation looks right, persist the case via `cases create` and move to Step 6 of the [QA practice workflow](#qa-practice-workflow-read-this-first).
+If the dry-run passes and the conversation looks right, persist the case via `cases create` and move to Step 9 of the [QA practice workflow](#qa-practice-workflow-read-this-first).
 
 ### Model overrides
 
@@ -575,7 +643,7 @@ By default, an eval run or a chat call invokes real tools — searches the real 
 | **Per case** (saved) | `EvalCase.tool_mocks` | Every time the case runs in any eval |
 | **Per chat call** (ephemeral) | `PlaybookChatRequest.tool_mocks` | This chat request only — forced into preview+eval mode (admin only) |
 
-Step 3 of the [QA practice workflow](#qa-practice-workflow-read-this-first) makes asking the user about mocks **mandatory** before any chat or eval run. The rest of this section covers the shape + the rules.
+Step 6 of the [QA practice workflow](#qa-practice-workflow-read-this-first) makes asking the user about mocks **mandatory** before any chat or eval run. The rest of this section covers the shape + the rules.
 
 ### What can and cannot be mocked
 
@@ -701,7 +769,7 @@ Tools you DON'T list in `tool_mocks` are unaffected — they call the real imple
 
 ### Mocking during chat (no persisted case)
 
-The same `tool_mocks` shape works on `qa.py chat` via `--tool-mocks-file`, letting you stub tool responses for a single ad-hoc chat without authoring a case. Useful in Step 4 of the [QA practice workflow](#qa-practice-workflow-read-this-first) when you're still hunting for the fix.
+The same `tool_mocks` shape works on `qa.py chat` via `--tool-mocks-file`, letting you stub tool responses for a single ad-hoc chat without authoring a case. Useful in Step 7 of the [QA practice workflow](#qa-practice-workflow-read-this-first) when you're still hunting for the fix.
 
 Semantics:
 
@@ -1198,9 +1266,12 @@ Periodically run evals to catch drift:
 
 The most common request — full detail in the [QA Practice Workflow](#qa-practice-workflow-read-this-first) section at the top. Short form:
 
-1. **data-expert** → pull the offending conversation, identify the playbook version + user_context that was active
-2. **Build mental model** — which layer (instructions / skill / KB / tool) drove the bad behaviour
-3. **REQUIRED: ask the user what to mock** — enumerate available tools, get confirmation
-4. **Reproduce + iterate**: `qa.py chat --instructions ... --tool-mocks-file ...`. Read the full response (events, tool calls, citations, explanation), not just the assistant message.
-5. **Dry-run the candidate case** to validate the case definition itself
-6. **Persist case + run only it**: `cases create` then `runs create --case-ids NEW_CASE_ID` (still with the override / mocks while iterating; drop them once the playbook version is promoted).
+1. **data-expert** → pull the full conversation: messages, events, tool calls, model, playbook version, user_context
+2. **builder** → pull the assistant content (instructions + skills) for that exact version
+3. **Pin down the incorrect behaviour** — confirm with the user (offer hypotheses with hints) if it wasn't stated
+4. **Root-cause** — wrong / misinterpreted / missing instruction, or wrong layer (skill description, KB, tool)
+5. **Propose the fix** — minimal diff + regression risk; get user feedback before iterating
+6. **REQUIRED: ask the user what to mock** — enumerate available tools, get confirmation
+7. **Reproduce + iterate**: `qa.py chat --instructions ... --tool-mocks-file ...` until the bad behaviour is gone — in-memory overrides ONLY, never by saving a version. Read the full response (events, tool calls, citations, explanation), not just the assistant message.
+8. **Human applies the new version** — deliver the final content, wait for confirmation + the new version ID
+9. **Eval coverage**: persist case(s) sized to the fix, run only them against the new version, then offer a full-suite run to catch regressions.
