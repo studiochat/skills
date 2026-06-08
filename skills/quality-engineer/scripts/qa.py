@@ -4,6 +4,10 @@
 Manages test cases, triggers eval runs, reads results, and simulates
 conversations with playbook assistants.
 
+All `qa.py chat` conversations are flagged as evals (is_eval=true), so they
+are excluded from the production chat log, analytics, and sticky-model
+assignment — with or without playbook-override / tool-mocks flags.
+
 Usage:
     qa.py cases list PLAYBOOK_BASE_ID
     qa.py cases create PLAYBOOK_BASE_ID --body '{...}'
@@ -437,6 +441,14 @@ def cmd_chat(
         "conversation_id": conversation_id,
         "user_message": message,
         "include_citations": True,
+        # QA chat is a testing tool — its conversations must never land in the
+        # production chat log, analytics, or sticky-model assignment. Mark every
+        # ad-hoc chat as an eval so the BE excludes it (the chatlog/metrics
+        # queries filter out is_eval=True by default). playbook_override /
+        # tool_mocks additionally force is_preview server-side, but a plain
+        # `qa.py chat --message ...` with neither would otherwise persist as a
+        # production conversation — so the flag has to be set here, always.
+        "is_eval": True,
     }
     if context:
         body["context"] = context
@@ -451,6 +463,11 @@ def cmd_chat(
     elapsed = data.get("elapsed_time_ms")
     elapsed_str = f" ({elapsed}ms)" if elapsed else ""
     print(f"conversation_id: {conversation_id}{elapsed_str}", file=sys.stderr)
+    print(
+        "  ↳ eval mode — conversation excluded from the production chat log, "
+        "analytics, and sticky-model assignment",
+        file=sys.stderr,
+    )
     if playbook_override is not None:
         print(
             f"  ↳ playbook override active "
@@ -459,8 +476,7 @@ def cmd_chat(
         )
     if tool_mocks is not None:
         print(
-            f"  ↳ tool mocks active (tools: {', '.join(sorted(tool_mocks.keys()))}) "
-            "— preview+eval mode forced; conversation excluded from chatlogs",
+            f"  ↳ tool mocks active (tools: {', '.join(sorted(tool_mocks.keys()))})",
             file=sys.stderr,
         )
 
