@@ -103,6 +103,12 @@ Quote the exact instruction(s) — or their absence — that explain the behavio
 Design the improvement and present it to the user BEFORE iterating:
 
 - **what changes** — which instruction / which skill / which KB, as a minimal diff
+- **what to wire** — a fix is often a **building block**, not just reworded prose: the right
+  move may be to add an `{{ examples: ID }}` block (instead of describing the tone), a
+  `{{ kb(ID) }}` search (instead of hard-coding a fact that drifted), a `{{ custom_tool: ... }}`
+  Slack notification, a `{{ tool(ID) }}` API call, or a handoff instruction. **Offer the macro
+  proactively** — don't just rewrite the paragraph. See [continuous-improvement → "Editing isn't
+  just writing — wire the building blocks"](../continuous-improvement/SKILL.md#editing-isnt-just-writing--wire-the-building-blocks).
 - **why** it addresses the root cause from Step 4
 - **regression risk** — which other behaviours share the instructions/skills you're touching
 
