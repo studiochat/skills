@@ -349,6 +349,25 @@ The referenced tools/KBs are registered in the agent even before the skill is lo
 
 ---
 
+## Tagging
+
+The assistant can apply **conversation tags** each turn (the `tags` field in its output). Tags are validated against a **closed whitelist** the platform builds automatically by parsing the instructions and skills: **every tag value wrapped in single backticks is registered as a supported tag.** At runtime, any tag the assistant emits that is NOT in this list is dropped — it never reaches the conversation.
+
+### Backtick policy (IMPORTANT)
+
+**Single backticks are reserved for tag values.** The whitelist is built by parsing backtick-wrapped tokens, so anything you wrap in single backticks that *looks like a tag* becomes a "supported tag".
+
+- ✅ **Wrap every tag value in single backticks**, in both instructions and skills — e.g. `` `billing` ``, `` `refund_request` ``, `` `escalation-whatsapp` ``. If a tag is mentioned **without** backticks everywhere, it won't be in the whitelist and the assistant **cannot apply it** (it gets dropped).
+- ❌ **Do NOT use single backticks for anything that is not a tag** — status values (`completed`, `failed`, `processing`), API field names (`source_channel`), tool IDs, enum values, currency codes, or code snippets. Backticked, they get parsed as fake tags, polluting the whitelist and the output spec. For those, use plain text, "double quotes", or fenced code blocks instead.
+
+**What the parser recognises as a tag:** a single-token, lowercase `snake_case` / `kebab-case` value (may start with a digit, e.g. `2fa`). Tokens that are camelCase (`manualReview`), dotted (`user.status`), numeric (`5003`), or multi-word are ignored — so they're safe even if backticked, but prefer not to backtick non-tags at all.
+
+> Rule of thumb: **if it isn't a tag the assistant should apply to the conversation, don't put it in single backticks.**
+
+When defining the tag taxonomy (in the instructions and/or a dedicated `tagging` skill), list every tag value in backticks. Tags that arrive externally (routing/channel tags injected via the chat API context) are not parsed here and are never filtered — only tags the assistant itself emits go through the whitelist.
+
+---
+
 ## Example Blocks
 
 Example blocks are reference conversations that show the assistant HOW to communicate — tone, style, personality, containment strategies, and approach. They are inline in the instructions or skills via `{{ examples: BLOCK_ID }}` template macros.
