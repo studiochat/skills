@@ -893,6 +893,8 @@ Matches both agent and team handoffs. Useful when the playbook is supposed to re
 
 There's also a **legacy** `assertion_tags: ["billing", "escalation"]` field on the case body that asserts a list of tags in one shot. It still works for backwards compatibility, but new cases should prefer one `tag_added` assertion per tag — they show up individually in the diff view and per-assertion result rows.
 
+> **Tag whitelist gotcha.** The platform only applies tags that are in the playbook's supported set, which is parsed from **single-backtick-wrapped** tag values in the instructions + skills. If a `tag_added` assertion fails even though the assistant "tried" to tag, check that the tag value is wrapped in backticks somewhere in the instructions/skills — an un-backticked tag is dropped at runtime. Conversely, never wrap non-tag tokens (status values, field names, tool IDs) in single backticks: they get parsed as fake tags. When iterating on skill content via `--skills-file`, follow the same backtick policy (see the **Tagging** section of the `builder` skill).
+
 #### `private_note_contains` — a private note's content contains a substring
 
 ```json
