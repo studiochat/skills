@@ -307,27 +307,39 @@ All fields optional:
 
 ```json
 {
-  "name": "string (required)",
-  "description": "string (required)",
-  "url": "string (required)",
+  "name": "string (required, ^[a-zA-Z0-9_.-]{1,64}$, max 64 — NO spaces)",
+  "description": "string (required) — what it does and when to use it",
+  "url": "string (required) — URL template with {{ param }} placeholders (DOUBLE braces, Jinja)",
   "method": "GET|POST|PUT|PATCH|DELETE",
-  "headers": {"key": "value"},
+  "headers": {"X-API-Key": "..."},
   "parameters": [
-    {
-      "name": "string",
-      "type": "string",
-      "description": "string",
-      "required": true
-    }
+    {"name": "order_id", "description": "What this URL param represents"}
   ],
-  "data_expiration_hours": "int|null (cache TTL, null=never)"
+  "body_type": "fields | json (default: fields)",
+  "body_fields": [
+    {"name": "subject", "type": "string|number|integer|boolean", "value": "{{ subject }} | literal | {{ context.path }}", "description": "LLM hint (templated values only)", "required": true}
+  ],
+  "body_json": "raw JSON template with {{ param }} (used when body_type=json)",
+  "data_expiration_hours": "int|null (response cache TTL; 0=always re-fetch, null=never)",
+  "response_jmespath": "string|null (optional JMESPath to trim the response before the LLM sees it)"
 }
 ```
+
+**URL templating uses `{{ param }}` — double braces (Jinja), not `{param}`.**
+
+**`parameters`** = URL placeholders only. Each is `{name, description}` and is **always string** (no `type`/`required` — they're implicit). Every `{{ name }}` in `url` should have one; the `description` is what the LLM sees. A param named `context.<path>` (or `{{ context.<path> }}` written straight in the URL) is resolved from conversation context and is **not** asked to the LLM.
+
+**`body_fields`** = the body for POST/PUT/PATCH (`body_type: "fields"`, the default). Per field, `value` is:
+- a `{{ param }}` template → exposed to the LLM (typed by `type`, prompted by `description`),
+- a literal (`"chatbot"`, `"false"`) → hardcoded, sent as-is (cast to `type`),
+- a `{{ context.path }}` → resolved from context, not asked to the LLM.
+
+**JSON body** (`body_type: "json"`): put the template string in `body_json`; `body_fields` then only supplies each param's `type`/`description`/`required`. A full-string `"{{ x }}"` keeps the typed value; embedded interpolates as string.
 
 ### Update API Tool
 `PATCH /projects/{pid}/api-tools/{tool_id}`
 
-All fields optional.
+All fields optional — same shape as create.
 
 ### Delete API Tool
 `DELETE /projects/{pid}/api-tools/{tool_id}` — Soft delete
