@@ -572,27 +572,100 @@ In example conversations, use `#` to mark where dynamic data should go. The assi
 
 ## API Tools
 
-Custom HTTP integrations the assistant can call during conversations.
+Custom HTTP integrations the assistant can call during conversations. Project-owned and self-contained — once created, reference it in instructions or a skill with `{{ tool(TOOL_ID) }}`. Different from **toolkit actions** (below), which depend on a connection the user owns.
 
 ```bash
 # List tools
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools" --params include_playbook_usage=true
+```
 
-# Create tool
+### Create a GET tool (URL parameters)
+
+```bash
 python3 scripts/api.py \
   "/projects/$STUDIO_PROJECT_ID/api-tools" \
   -X POST --body '{
-    "name": "Check Order Status",
-    "description": "Look up order status by order ID",
-    "url": "https://api.example.com/orders/{order_id}",
+    "name": "check_order_status",
+    "description": "Look up order status by order ID. Use when the customer asks where their order is.",
+    "url": "https://api.example.com/orders/{{ order_id }}",
     "method": "GET",
+    "headers": {"X-API-Key": "your-secret-key"},
     "parameters": [
-      {"name": "order_id", "type": "string", "description": "The order ID", "required": true}
+      {"name": "order_id", "description": "The order ID the customer provides"}
     ]
   }'
 ```
 
-A custom API tool is project-owned and self-contained — once created, reference it anywhere with `{{ tool(TOOL_ID) }}`. This is different from **toolkit actions** (below), which depend on a connection the user owns.
+- **`name`** must match `^[a-zA-Z0-9_.-]{1,64}$` (LLM tool-name rule — **no spaces**).
+- **`headers`** are static — put auth here (e.g. `X-API-Key`).
+- **`data_expiration_hours`** (optional): response cache TTL. `0` = always re-fetch, `null`/omitted = never expires.
+- **`response_jmespath`** (optional): a JMESPath applied to the JSON response before the LLM sees it, to trim/reshape verbose payloads.
+
+### Templating: `{{ param }}` (double braces, Jinja)
+
+Inside a tool's `url`, `body_fields`, or `body_json`, placeholders are **`{{ name }}`** (double curly braces, whitespace optional). Two kinds:
+
+| Placeholder | Filled by | Where you declare it |
+|---|---|---|
+| `{{ param }}` | the **LLM** at call time | `parameters` (URL) or `body_fields` (body) — the `description` is what the LLM sees |
+| `{{ context.path }}` | the **conversation context**, not asked to the LLM | nowhere extra — auto-detected (e.g. `{{ context.contact.email }}`) |
+
+> Don't confuse this with the `{{ tool(...) }}` / `{{ kb(...) }}` **pills** that go in *playbook/skill text* (above). Those reference objects; `{{ param }}` here is a value the tool fills in. Same braces, different layer.
+
+**Every templated field needs a description.** For URL params, each `{{ x }}` in `url` gets a `parameters` entry — `{name, description}` only, and URL params are **always string**. For body params, the description lives on the matching `body_fields` entry. That description is the *only* signal the LLM has for what to put there — write it well.
+
+### POST / PUT / PATCH body
+
+Define the body with **`body_fields`** (`body_type` defaults to `"fields"`). Each field's `value` is a hardcoded literal, an LLM-filled `{{ param }}`, or a `{{ context.path }}`:
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/api-tools" \
+  -X POST --body '{
+    "name": "create_ticket",
+    "description": "Open a support ticket for the customer.",
+    "url": "https://api.example.com/tickets",
+    "method": "POST",
+    "headers": {"X-API-Key": "your-secret-key"},
+    "body_fields": [
+      {"name": "subject",  "type": "string",  "value": "{{ subject }}",  "description": "Short title for the issue", "required": true},
+      {"name": "priority", "type": "integer", "value": "{{ priority }}", "description": "1=low … 5=urgent",          "required": false},
+      {"name": "source",   "type": "string",  "value": "chatbot"},
+      {"name": "email",    "type": "string",  "value": "{{ context.contact.email }}"}
+    ]
+  }'
+```
+
+- `{{ subject }}` / `{{ priority }}` → exposed to the LLM, typed by `type`, prompted by `description`.
+- `"value": "chatbot"` → **hardcoded** literal (no template) → sent as-is, cast to `type`.
+- `{{ context.contact.email }}` → pulled from conversation context, **not** asked to the LLM.
+- `type`: `string | number | integer | boolean`. `required` defaults to `true`.
+
+**Raw JSON body** (`body_type: "json"`) — for nested structure: put the template in `body_json` with `{{ param }}` placeholders, and use `body_fields` only to carry each param's `type`/`description`/`required`:
+
+```json
+{
+  "name": "submit_order", "description": "...", "url": "https://api.example.com/orders", "method": "POST",
+  "body_type": "json",
+  "body_json": "{\"order\": {\"id\": \"{{ order_id }}\", \"qty\": {{ qty }}}}",
+  "body_fields": [
+    {"name": "order_id", "type": "string",  "description": "Order id"},
+    {"name": "qty",      "type": "integer", "description": "Quantity"}
+  ]
+}
+```
+
+A full-string `"{{ qty }}"` (or a bare `{{ qty }}`) becomes a **typed** value (int/bool preserved); an embedded `"id-{{ x }}"` is string-interpolated.
+
+### Get / update / delete
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID"
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID" -X PATCH --body '{"description": "..."}'   # all fields optional
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID" -X DELETE                                  # soft delete
+```
+
+Then wire it into an assistant with `{{ tool(TOOL_ID) }}` (see [Template macros](#template-macros-the-pills)).
 
 ---
 
