@@ -910,3 +910,27 @@ All item types support notes: FAQ (`faq_items[].id`), Snippets (`snippet_items[]
 - No syncing required — changes are immediate
 - KB status is NOT changed when adding/removing notes
 - Notes override the original content for the LLM
+
+---
+
+## Approvals
+
+Queued sandbox writes. When a write returns **202** with an `approval_id`, a human admin
+has to approve it from the Approvals panel before it executes.
+
+### Describe a queued change
+`PATCH /approvals/{approval_id}/description`
+
+```json
+{"description": "What is changing and why, in plain language for the reviewer."}
+```
+
+Returns the full approval. Only PENDING approvals accept a description (409 once
+reviewed). Always call this right after receiving a 202 — the panel shows your text as
+the primary explanation of the request.
+
+### List / get approvals
+`GET /approvals?status=pending` · `GET /approvals/{approval_id}`
+
+Useful to check whether a queued change was approved (`status` becomes
+`executed`/`failed`) before building on top of it.
