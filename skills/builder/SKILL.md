@@ -15,6 +15,29 @@ Build and configure Studio Chat assistants using the API. All calls are authenti
 playbooks, API tools, or trigger syncing without explicit user confirmation. Show what
 you're about to do and wait for approval before executing any write operation.
 
+## Approvals: describe every queued change
+
+With a sandbox key (`sbs_`), some write operations don't execute immediately: the API
+answers **202** with `{"approval_id": "...", "status": "pending", ...}` and queues the
+request for a human admin to review. Whenever a request returns 202 with an
+`approval_id`, immediately attach an explanation of the change — it is what the reviewer
+reads in the approvals panel instead of the raw payload:
+
+```bash
+python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
+  "description": "Links the new Refunds FAQ KB to the Support assistant so it can answer refund questions on its own. Before: 1 KB linked. After: 2 KBs. Asked by the user in chat."
+}'
+```
+
+Write it for the human admin (shown verbatim in the UI):
+
+- WHAT changes and WHY — the user request or the data that motivated it
+- the relevant before → after in plain words (names, counts, key fields), not JSON
+- a few sentences, in the language the account operates in
+
+Then tell the user the change is queued for approval. Only PENDING approvals accept a
+description (409 once reviewed); you can re-PATCH to refine it while it is pending.
+
 ## Key Terminology
 
 **Assistants and playbooks are the same concept.** In the API, the term "playbook" is used
@@ -1105,7 +1128,8 @@ python3 scripts/api.py "/monitors/MONITOR_ID" -X DELETE
 > **Sandbox (`sbs_`) callers:** delete is the one operation that needs a human reviewer.
 > The request returns **202** with `{"approval_id": "...", "status": "pending", "description": "...",
 > "message": "Request queued for admin approval."}` instead of executing immediately. Confirm
-> the deletion with the user (or the admin) before relying on the queue. Every other monitor
+> the deletion with the user (or the admin) before relying on the queue, and describe the
+> queued change (see *Approvals: describe every queued change* above). Every other monitor
 > operation (preview, create, list, get, update, duplicate, test, runs) executes synchronously.
 
 ### Test run a monitor
