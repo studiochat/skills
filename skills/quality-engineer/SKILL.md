@@ -327,7 +327,7 @@ For each test case, the system:
 
 1. **Generates a user message** — either the exact `first_message` or an LLM-generated message based on the scenario
 2. **Sends it to the assistant** — calls the actual playbook agent with the message
-3. **Checks termination** — an LLM judges whether the expected outcome was reached
+3. **Checks termination** — an LLM judges whether the expected outcome has ALREADY occurred (a promised/imminent outcome doesn't count; outcomes that are assistant actions — handoff, tag, note — are checked against the real emitted events). Write `termination` as an observable, completed fact: "el asistente derivó la conversación", not "el usuario quedará conforme"
 4. **Repeats** — generates the next user message based on the scenario + conversation so far
 5. **Evaluates assertions** — after the conversation ends, each assertion is evaluated by an LLM judge
 6. **Checks tags** — verifies expected tags were applied during the conversation
@@ -444,6 +444,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 
 | Slug | Notes |
 |---|---|
+| `google/gemini-3.1-flash-lite` | **Recommended simulator + judge** for high-volume suites: validated verdict quality, ~15x cheaper than the gpt-4o default, and supports the flex service tier (eval runs request it automatically, ~50% off). |
 | `google/gemini-2.5-flash` | Newest stable Flash. |
 | `google/gemini-2.5-flash-lite` | Cheaper Flash variant. |
 | `google/gemini-2.0-flash-001` | Previous Flash generation. |
@@ -835,6 +836,11 @@ The scenario tells the **simulated user** how to behave. Write it from the user'
 - Describe what the user wants, not what the assistant should do
 - Include constraints: "the user is impatient," "the user doesn't have their order number"
 - Keep it focused — one scenario per case
+- **Language**: the simulator follows the scenario's language. A case testing Portuguese support must have its scenario written in (or explicitly demanding) Portuguese — that overrides the run-level language default.
+- **Force the preconditions your assertions need**: if an assertion says "insiste en la foto cuando el usuario no la envía", the scenario must say the user refuses or fails to send the photo. Otherwise the condition never occurs and the assertion passes vacuously without testing anything.
+- **Exact data**: the simulator reuses the scenario's IDs, amounts and dates verbatim and won't invent identifiers — put every datum the flow needs into the scenario.
+- **Don't contradict the playbook**: a case expecting "indaga antes de derivar" while the scenario has the user demanding a human (which the playbook answers with an immediate handoff) will flip forever — the assistant can't satisfy both. Align the case's expectation with the playbook rule, or change the scenario trigger.
+- Closures are short: once the user's goal is met, the simulator closes in one message — don't design assertions that rely on long goodbye exchanges.
 
 ### Assertion types — pick the right tool for each check
 
@@ -859,12 +865,20 @@ The `--judge-model` flag affects only text assertions. Structured assertions ign
 {"criteria": "The assistant asks for the order number before proceeding"}
 ```
 
-Write the criteria as a clear, verifiable statement:
+**The judge returns a TERNARY verdict** — `AssertionResult.verdict` is `passed`, `failed`, or **`ambiguous`** (the legacy `passed` boolean maps `ambiguous` → `true`). See [The `ambiguous` verdict](#the-ambiguous-verdict--criteria-lint) below: a criterion too vague to verify objectively doesn't get a guessed binary verdict — it gets flagged for rewrite.
 
-- ✅ "The assistant mentions the 30-day refund policy"
-- ✅ "The assistant asks for the order number before proceeding"
-- ❌ "The assistant is helpful" (too vague)
-- ❌ "Response time is under 2 seconds" (not evaluable from text)
+**Rules for writing criteria that never come back ambiguous** (each rule maps to a real flakiness pattern found in production suites):
+
+1. **Binary and observable.** The criterion must describe something two independent judges would always score identically: a concrete behavior, a phrase category, a countable action.
+   - ✅ "El asistente menciona la política de reembolso de 30 días"
+   - ✅ "El asistente incluye al menos una frase de empatía (p. ej. 'lamento lo que pasó')"
+   - ❌ "El asistente responde cordial" → `ambiguous` (cualidad indefinida)
+   - ❌ "El asistente usa un tono muy empático" → `ambiguous` (palabra de grado sin umbral: "muy", "bastante", "suficientemente")
+2. **One check per criterion.** Split compound criteria — "hace X **y** explica Y" becomes two assertions; each shows its own verdict in the diff view. Alternatives with "o" are supported (passes if ANY branch holds) but make failures harder to read.
+3. **Negations are reliable.** "El asistente NO hace X" passes when X is absent — the judge is explicitly instructed that absence alone satisfies a negated criterion. Don't avoid them.
+4. **Conditional criteria need the scenario to force the condition.** "Si el usuario insulta, el asistente deriva" passes *vacuously* when the simulated user never insults — the criterion tested nothing. If you write "cuando Y, entonces X", the `scenario` must make Y actually happen.
+5. **Semantic match, not literal.** The assistant doesn't need the criterion's exact words — an equivalent paraphrase in any language satisfies it. Don't write criteria that demand specific phrasings unless the phrasing itself is the requirement.
+6. **The judge sees the assistant's actions.** Each assistant turn carries an `[actions: handoff_agent, label=..., note]` line in the judge's view, so criteria like "deriva la conversación" are judged against the real event — but prefer the structured assertion (`handoff`, `tag_added`, …) whenever one exists: deterministic beats judged.
 
 #### `tool_called` — a specific tool was invoked
 
@@ -980,6 +994,29 @@ There's also a **legacy** `assertion_tags: ["billing", "escalation"]` field on t
 ```
 
 Useful when the playbook is supposed to write specific context into a private note for the next human agent. `case_insensitive` defaults to `true`.
+
+### The `ambiguous` verdict — criteria lint
+
+When a text criterion hinges on an intensity qualifier ("muy", "bastante") or an undefined subjective quality ("cordial", "natural", "tono adecuado") and the conversation doesn't satisfy or violate it in an extreme, unmistakable way, the judge does NOT guess. It returns:
+
+```json
+{
+  "verdict": "ambiguous",
+  "explanation": "criterio subjetivo: una sola frase de empatía seguida de texto procedural",
+  "rewrite_suggestion": "El asistente reconoce explícitamente la frustración del usuario con al menos una frase que valide la dificultad"
+}
+```
+
+What this means in practice:
+
+- **An ambiguous assertion never fails the case.** The case status is computed from `failed` verdicts only. Ambiguous is a *lint on the test*, not a verdict on the assistant.
+- **`rewrite_suggestion` is the fix.** It's a judge-proposed replacement criterion, in the same language as the original, that is objectively verifiable and captures the apparent intent. The UI renders it in a violet hint box (run results and dry-run panel).
+- **The workflow:** run the suite → collect every `ambiguous` → apply the suggested rewrites via `PATCH /eval-cases/{id}` (review them first — the judge captures *apparent* intent) → re-run. A healthy suite has zero ambiguous verdicts; each one that appears is the system telling you exactly which test to fix and how.
+- A criterion that is vague but *unmistakably* satisfied or violated still gets a normal verdict — ambiguous only fires on the genuinely undecidable borderline (one formulaic "entiendo tu frustración" against "tono MUY empático" is the canonical example).
+
+### Internal errors vs failed cases
+
+`EvalResult.status` distinguishes `failed` (assertions failed — a verdict on the assistant) from **`error`** (eval infrastructure failed — provider 429s that survived the retry backoff, timeouts, unparseable judge output). Errors count under `EvalRun.error_cases`, never under `failed_cases`, and render amber in the UI. If a run shows internal errors, re-run it — don't read them as regressions. Eval-side LLM calls already retry with exponential backoff (up to 6 attempts, `Retry-After`-aware) before giving up.
 
 ### Combined examples
 
@@ -1199,11 +1236,23 @@ print("\nFailed cases:")
 for r in results:
     if r["status"] != "passed":
         print(f"\n  [{r.get('case_name', r['case_id'])}] — {r['status']}")
+        if r["status"] == "error":
+            # Internal error (infra), not an assistant failure — re-run, don't diagnose.
+            print(f"    internal error: {r.get('error_message')}")
+            continue
         for a in r.get("assertion_results", []):
-            status = "PASS" if a["passed"] else "FAIL"
-            print(f"    [{status}] {a['criteria']}")
-            if not a["passed"]:
+            verdict = a.get("verdict") or ("passed" if a["passed"] else "failed")
+            print(f"    [{verdict.upper()}] {a['criteria']}")
+            if verdict == "failed":
                 print(f"           {a['explanation']}")
+
+# Criteria lint: every ambiguous verdict is a test to rewrite (suite-wide, not just failed cases)
+print("\nAmbiguous criteria (rewrite these):")
+for r in results:
+    for a in r.get("assertion_results", []):
+        if a.get("verdict") == "ambiguous":
+            print(f"  - [{r.get('case_name')}] {a['criteria']}")
+            print(f"    sugerencia: {a.get('rewrite_suggestion')}")
 ```
 
 ### Example: Compare Two Versions

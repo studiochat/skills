@@ -335,7 +335,7 @@ Triggers an evaluation run in the background. Returns immediately with a pending
 
 The run executes asynchronously:
 1. Status changes to `running` when execution starts
-2. `passed_cases` and `failed_cases` update as each case completes
+2. `passed_cases`, `failed_cases` and `error_cases` update as each case completes (`error_cases` = infra aborts, counted apart so they never read as regressions)
 3. Status changes to `completed` (or `failed`/`cancelled`) when done
 
 ### Model strings
@@ -425,13 +425,26 @@ id                      string  Result ID
 case_id                 string  Test case ID
 case_name               string  Test case name
 case_scenario           string  Scenario description
-status                  string  "passed", "failed", or "error"
+status                  string  "passed" (no failed assertions), "failed"
+                                (≥1 failed assertion), or "error" (eval
+                                INFRA failure — provider 429s/timeouts that
+                                survived retries, unparseable judge output;
+                                re-run, don't read as a regression)
 total_assertions        int     Total assertion count
-passed_assertions       int     Passed count
-failed_assertions       int     Failed count
+passed_assertions       int     Passed count (excludes ambiguous)
+failed_assertions       int     Failed count (excludes ambiguous)
 assertion_results       array   Per-assertion details
   criteria              string  The criteria evaluated
-  passed                bool    Whether it passed
+  passed                bool    Legacy binary — ambiguous maps to true;
+                                prefer `verdict`
+  verdict               string  "passed" | "failed" | "ambiguous" (null on
+                                rows persisted before the field existed).
+                                "ambiguous" = the criterion is too vague to
+                                verify objectively — a lint on the test, it
+                                never fails the case
+  rewrite_suggestion    string  Only on ambiguous verdicts: judge-proposed
+                                rewrite of the criterion into something
+                                objectively verifiable
   explanation           string  LLM explanation of why
 tag_results             object  {tag_name: bool} — tag assertion results
 conversation            array   The simulated conversation
