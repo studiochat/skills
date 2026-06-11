@@ -72,7 +72,7 @@ import urllib.request
 from urllib.parse import urlencode, urljoin
 
 
-BASE_URL = "https://api.studiochat.io"
+BASE_URL = os.environ.get("STUDIO_API_URL", "https://api.studiochat.io")
 
 
 def _request(method, path, body=None, params=None):

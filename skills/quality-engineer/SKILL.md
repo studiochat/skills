@@ -32,6 +32,8 @@ Set the following environment variables before using the scripts:
 ```bash
 export STUDIO_API_TOKEN="sbs_your_api_key_here"
 export STUDIO_PROJECT_ID="your-project-uuid"
+# Optional — point the scripts at a different backend (e.g. local dev):
+# export STUDIO_API_URL="http://localhost:8000"
 ```
 
 API keys are available by request from the Studio Chat team at hey@studiochat.io.
