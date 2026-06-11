@@ -831,13 +831,49 @@ Use this when one case needs a different user identity, plan, or simulated state
 
 ## Writing Good Test Cases
 
-### Scenario Guidelines
+### Scenario Guidelines — the structured scenario framework
 
-The scenario tells the **simulated user** how to behave — it is the simulator's only script. A vague scenario makes the simulator improvise, and improvisation is where conversations (and verdicts) diverge between runs. **Write the scenario as a decision tree for the user, not as a description**: the assistant can react in several ways, and the scenario must say what the user does on each branch.
+#### The concept
 
-#### The structured scenario (v2) — `scenario_blocks`
+The scenario **programs the simulated user** — it is the only script the simulator has. In the structured framework the scenario is not prose: it is a typed object (`scenario_blocks`) that the simulator executes like a **character sheet with a decision table**:
 
-Scenarios are authored as **structured JSON**, not prose. The API accepts the structure either on `scenario_blocks` or directly on the `scenario` field (it detects JSON vs text); the server renders the canonical prose into `scenario` for you, and the simulator receives the structure as a character sheet with hard rules and an explicit decision table. **Always author new cases this way** — free-text scenarios are the legacy escape hatch, not the default.
+```
+persona     → WHO YOU ARE          (identity, register, language)
+objetivo    → YOUR GOAL            (every message must move toward it)
+datos[]     → DATA YOU HOLD        (exact values + a hard delivery rule each)
+reacciones[]→ DECISION TABLE       (assistant move → user response, matched
+              + catch_all            top-to-bottom on EVERY turn)
+cierre      → CLOSING RULE         (how to end, in ONE message)
+```
+
+Why this exists: a prose scenario leaves every unstated decision to improvisation — does the user know the ID? volunteer it or wait? accept the alternative the assistant offers? — and improvisation is exactly where conversations (and verdicts) diverge between runs. The structure removes those degrees of freedom. Ten simultaneous runs of a suite written in this framework produced **zero verdict flips**; the residual variance was infrastructure, not simulation.
+
+Two more fields travel with the scenario and project onto the case: `primer_mensaje` (becomes the case's `first_message` — pins turn 1 verbatim, no LLM) and `terminacion` (becomes `termination` — the run stops when this outcome has occurred).
+
+#### What the simulator does with each field
+
+This is the contract that makes each field matter — author them knowing how they execute:
+
+| Field | The simulator is told... | Without it |
+|---|---|---|
+| `persona` | "WHO YOU ARE: …" — identity, register (tuteo/usted), language | Register/language drift between runs (a Portuguese case simulated in Spanish) |
+| `objetivo` (**required**) | "YOUR GOAL — every message you write must move toward it" | The conversation wanders and `terminacion` has nothing crisp to detect |
+| `datos[]` | "DATA YOU HOLD — data not listed here **does not exist for you: never invent IDs, amounts, dates or emails**", plus one hard rule per datum (see delivery policies below) | The simulator invents IDs your mocks don't match, or hands data over too early — killing "asks for the ID **before** acting" assertions |
+| `reacciones[]` | "DECISION TABLE — before writing each message, match the assistant's LAST message against these branches, top to bottom, and obey the first match" | The assistant's counter-moves are unpredictable; without branch instructions the simulator improvises: accepts alternatives it should refuse, drops refusals, invents answers |
+| `catch_all` | The decision table's final row: "Anything else: …" (default: answer briefly and neutrally, never invent data) | The branch you didn't predict derails the case |
+| `cierre` | "CLOSING RULE: … Close in ONE short message; never stretch goodbyes" | 12-turn farewell loops that burn tokens and add late-conversation noise |
+
+**Delivery policies** (`entrega`, one per datum) — these are verbatim hard rules in the simulator's prompt:
+
+| `entrega` | The simulator must... | Use it for |
+|---|---|---|
+| `de_entrada` | include the datum in its FIRST message, verbatim | Skipping the ask-for-it dance when it's not what the case tests |
+| `si_lo_piden` | reveal it ONLY after the assistant explicitly asks — never volunteer it | Exercising "asks before acting" assertions (the precondition is forced) |
+| `nunca` | NEVER reveal it: say it doesn't have it / can't find it, and hold that refusal even under insistence | Refusal cases — pair with a `tool_not_called` guard |
+
+#### The complete shape
+
+`POST /playbooks/{base_id}/eval-cases` — the `scenario` field accepts the structure directly (or use `scenario_blocks`; both are equivalent). The server renders canonical prose into `scenario` for legacy readers; you never write prose yourself:
 
 ```json
 {
@@ -857,55 +893,34 @@ Scenarios are authored as **structured JSON**, not prose. The API accepts the st
   "assertions": [
     {"type": "tool_called", "name": "cancelar-pedido"},
     {"type": "text", "criteria": "El asistente confirma al usuario que el pedido quedó cancelado"}
-  ]
+  ],
+  "tool_mocks": {
+    "cancelar-pedido": {"match_kind": "any", "return_value": {"order_id": 88421, "cancelled": true}}
+  }
 }
 ```
 
-Field reference:
+Optional fields and their defaults: `catch_all` ("responder breve y neutro, sin inventar datos"), `cierre` (close in ONE message when the goal is met), `primer_mensaje` (omitted → the simulator opens according to the goal), `terminacion` (may instead be given as the case's top-level `termination`).
 
-| Field | Required | Notes |
-|---|---|---|
-| `objetivo` | **yes** | The user's single goal — one per case; mirror it in `terminacion` |
-| `persona` | no | Register (tuteo/usted), mood, language if not the default |
-| `datos[]` | no | `{"dato": "pedido=88421", "entrega": "de_entrada" \| "si_lo_piden" \| "nunca"}` — exact values + delivery policy |
-| `reacciones[]` | no | `{"si": "<assistant move>", "entonces": "<user response>"}` — typed pairs, branch coverage |
-| `catch_all` | no | Default: "responder breve y neutro, sin inventar datos" |
-| `cierre` | no | Default: close in ONE message when the goal is met |
-| `primer_mensaje` | no | Projects onto the case's `first_message` — pins turn 1 |
-| `terminacion` | no | Projects onto the case's `termination` (required there if not given here) |
+#### Authoring procedure — write every case in this order
 
-Each block exists because its absence is a known flakiness source:
-
-| Block | What breaks without it |
-|---|---|
-| **PERSONA** | Register/language drift between runs (a case meant for Portuguese simulated in Spanish; formal vs informal flapping) |
-| **OBJETIVO** (one, observable) | The simulator wanders; the `termination` check has nothing crisp to detect. The objetivo and the `termination` field should be two views of the same fact. |
-| **DATOS** (exact values + delivery policy) | The simulator invents IDs the mocks don't match, or hands over data too early — killing cases that assert "asks for the ID **before** acting". The delivery policy ("lo da solo si se lo piden" / "NUNCA lo da") is what makes precondition-dependent assertions exercisable. |
-| **REACCIONES** (branch coverage) | The assistant's counter-moves are not fully predictable. Without branch instructions, the simulator improvises — agreeing to alternatives it should refuse, dropping refusals it should hold, answering questions with invented facts. **Enumerate the assistant's likely moves and the user's response to each.** |
-| **Catch-all reaction** | The branch you didn't predict. "Responder breve y neutro, sin inventar datos" keeps unpredicted turns from derailing the case. |
-| **CIERRE** | Farewell loops (12-turn goodbye exchanges) that burn tokens and create late-conversation noise. |
-
-#### How to enumerate the REACCIONES branches
-
-Read the playbook (builder skill) and list every rule that can fire on this flow — each rule is a branch the assistant might take. Typical branch set for almost any case:
-
-1. Assistant asks for a datum → give it / refuse it (per the case's design)
-2. Assistant asks for confirmation → confirm / back out
-3. Assistant offers an alternative path → accept / reject
-4. Assistant hands off to a human → accept and close
-5. Assistant asks something unpredicted → the catch-all
-
-A case that tests a **refusal** ("user never provides the ID") must say so emphatically and cover the assistant's insistence: *"NO sabe el número de pedido. Si se lo piden, dice que no lo encuentra. Aunque insistan, no lo da en toda la conversación."* The simulator is trained to hold refusals the scenario dictates — but only if the scenario dictates them explicitly.
+1. **Read the playbook** (builder skill). Every playbook rule that can fire on this flow is a branch the assistant might take — this is your raw material for `reacciones` and the source of truth the case must not contradict.
+2. **Pick ONE `objetivo`**, observable. Write `terminacion` as the same fact already occurred: objetivo "cancelar el pedido 88421" → terminacion "El asistente confirmó la cancelación del pedido". They are two views of one fact.
+3. **List the `datos`** the flow needs, with exact literal values. **If you don't know what realistic values look like in this business — ask the user. Never invent** (see Hard rules). Choose each `entrega` deliberately: it is the lever that forces (or forbids) the preconditions your assertions need.
+4. **Enumerate `reacciones`** from the playbook rules. The near-universal branch set: asks for a datum / asks for confirmation / offers an alternative / hands off to a human — plus whatever is specific to this flow. Everything else falls to `catch_all`.
+5. **Pin `primer_mensaje`** if the opening matters to the case; otherwise let the simulator open from the goal.
+6. **Write `tool_mocks`** that reuse the exact `datos` values and mirror the real API's shape (list endpoints lean, detail endpoints rich).
+7. **Write assertions**: structured types for what the assistant *does* (tools, tags, handoff, skills), `text` only for what it *says*.
 
 #### Hard rules
 
 - **NEVER invent business data — ask first.** The `datos` block and the `tool_mocks` need realistic, consistent values (order IDs, product names, amounts, dates). If you don't know what those look like in this business — what products exist, what an order ID format is, which states an order can be in — **stop and ask the user** before authoring the case. An invented datum produces a case that tests a flow the business doesn't have, and mocks that drift from the real API shape. Asking costs one message; a suite built on invented data costs every future debugging session.
 - **The scenario describes the USER, never the assistant.** "El asistente deberá pedir el ID" does not belong in a scenario — that's an assertion. A scenario that scripts the assistant confuses the simulator into playing both roles.
 - **One objective per scenario.** Two goals ("cancelar el pedido y de paso preguntar precios") produce conversations that satisfy assertions in unpredictable order. Split into two cases.
-- **Pin the first turn with `first_message`** whenever the opening matters — it anchors the whole conversation deterministically and confines simulator variance to follow-up turns.
-- **Exact data only**: every ID, amount and date the flow needs goes in `datos[]` with its literal value, matching the case's `tool_mocks`. The simulator is explicitly told data not listed there does not exist — if a datum is missing, the conversation stalls.
+- **Refusals must be explicit and covered against insistence.** A refusal case needs `entrega: "nunca"` AND a reaction for the assistant's follow-up attempts (e.g. `{"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"}`). The simulator holds refusals the scenario dictates — but only those.
 - **Don't contradict the playbook**: a case expecting "indaga antes de derivar" while the scenario has the user demanding a human (which the playbook answers with an immediate handoff) will flip forever. Align the expectation with the playbook rule, or change the scenario trigger.
-- **Mocks must mirror the real API's shape**: if the list endpoint mock includes prices, the assistant never needs the detail tool — and your `tool_called` assertion fails for the wrong reason. Mock list endpoints lean (ids + names), detail endpoints rich.
+- **Mocks must mirror the real API's shape**: if the list endpoint mock includes prices, the assistant never needs the detail tool — and your `tool_called` assertion fails for the wrong reason.
+- **Free text is legacy.** The `scenario` field still accepts plain prose for old cases; never author new cases that way.
 
 #### Worked examples (few-shot — all data fictional)
 
