@@ -835,22 +835,44 @@ Use this when one case needs a different user identity, plan, or simulated state
 
 The scenario tells the **simulated user** how to behave — it is the simulator's only script. A vague scenario makes the simulator improvise, and improvisation is where conversations (and verdicts) diverge between runs. **Write the scenario as a decision tree for the user, not as a description**: the assistant can react in several ways, and the scenario must say what the user does on each branch.
 
-#### The structured scenario template
+#### The structured scenario (v2) — `scenario_blocks`
 
-Write scenarios with these blocks (plain text, bullets — the simulator follows them faithfully):
+Scenarios are authored as **structured JSON**, not prose. The API accepts the structure either on `scenario_blocks` or directly on the `scenario` field (it detects JSON vs text); the server renders the canonical prose into `scenario` for you, and the simulator receives the structure as a character sheet with hard rules and an explicit decision table. **Always author new cases this way** — free-text scenarios are the legacy escape hatch, not the default.
 
+```json
+{
+  "name": "cancelar-pedido-confirma",
+  "scenario": {
+    "persona": "cliente existente, apurado pero educado. Tutea. Habla español.",
+    "objetivo": "cancelar el pedido 88421",
+    "datos": [{"dato": "pedido=88421", "entrega": "si_lo_piden"}],
+    "reacciones": [
+      {"si": "pide el ID del pedido", "entonces": "darlo"},
+      {"si": "pide confirmación para cancelar", "entonces": "confirmar que sí, está seguro"},
+      {"si": "ofrece alternativas como reprogramar la entrega", "entonces": "rechazarlas, solo quiere cancelar"},
+      {"si": "deriva a una persona del equipo", "entonces": "aceptar y despedirse"}
+    ],
+    "terminacion": "El asistente confirmó la cancelación del pedido"
+  },
+  "assertions": [
+    {"type": "tool_called", "name": "cancelar-pedido"},
+    {"type": "text", "criteria": "El asistente confirma al usuario que el pedido quedó cancelado"}
+  ]
+}
 ```
-PERSONA: cliente existente, apurado pero educado. Tutea. Habla español.
-OBJETIVO: cancelar el pedido 1042.
-DATOS: pedido=1042. Lo da SOLO si se lo piden, no en el primer mensaje.
-REACCIONES:
-- Si el asistente pide el ID del pedido → darlo.
-- Si pide confirmación para cancelar → confirmar que sí, está seguro.
-- Si ofrece alternativas (reprogramar, cambiar dirección) → rechazarlas, solo quiere cancelar.
-- Si deriva a una persona → aceptar y despedirse.
-- Ante cualquier otra pregunta → responder breve y neutro, sin inventar datos.
-CIERRE: cuando confirmen la cancelación, agradecer y despedirse en UN mensaje.
-```
+
+Field reference:
+
+| Field | Required | Notes |
+|---|---|---|
+| `objetivo` | **yes** | The user's single goal — one per case; mirror it in `terminacion` |
+| `persona` | no | Register (tuteo/usted), mood, language if not the default |
+| `datos[]` | no | `{"dato": "pedido=88421", "entrega": "de_entrada" \| "si_lo_piden" \| "nunca"}` — exact values + delivery policy |
+| `reacciones[]` | no | `{"si": "<assistant move>", "entonces": "<user response>"}` — typed pairs, branch coverage |
+| `catch_all` | no | Default: "responder breve y neutro, sin inventar datos" |
+| `cierre` | no | Default: close in ONE message when the goal is met |
+| `primer_mensaje` | no | Projects onto the case's `first_message` — pins turn 1 |
+| `terminacion` | no | Projects onto the case's `termination` (required there if not given here) |
 
 Each block exists because its absence is a known flakiness source:
 
@@ -877,22 +899,97 @@ A case that tests a **refusal** ("user never provides the ID") must say so empha
 
 #### Hard rules
 
+- **NEVER invent business data — ask first.** The `datos` block and the `tool_mocks` need realistic, consistent values (order IDs, product names, amounts, dates). If you don't know what those look like in this business — what products exist, what an order ID format is, which states an order can be in — **stop and ask the user** before authoring the case. An invented datum produces a case that tests a flow the business doesn't have, and mocks that drift from the real API shape. Asking costs one message; a suite built on invented data costs every future debugging session.
 - **The scenario describes the USER, never the assistant.** "El asistente deberá pedir el ID" does not belong in a scenario — that's an assertion. A scenario that scripts the assistant confuses the simulator into playing both roles.
 - **One objective per scenario.** Two goals ("cancelar el pedido y de paso preguntar precios") produce conversations that satisfy assertions in unpredictable order. Split into two cases.
 - **Pin the first turn with `first_message`** whenever the opening matters — it anchors the whole conversation deterministically and confines simulator variance to follow-up turns.
-- **Exact data only**: every ID, amount and date the flow needs goes in DATOS with its literal value, matching the case's `tool_mocks`. The simulator won't invent identifiers — if a datum is missing, the conversation stalls.
+- **Exact data only**: every ID, amount and date the flow needs goes in `datos[]` with its literal value, matching the case's `tool_mocks`. The simulator is explicitly told data not listed there does not exist — if a datum is missing, the conversation stalls.
 - **Don't contradict the playbook**: a case expecting "indaga antes de derivar" while the scenario has the user demanding a human (which the playbook answers with an immediate handoff) will flip forever. Align the expectation with the playbook rule, or change the scenario trigger.
 - **Mocks must mirror the real API's shape**: if the list endpoint mock includes prices, the assistant never needs the detail tool — and your `tool_called` assertion fails for the wrong reason. Mock list endpoints lean (ids + names), detail endpoints rich.
 
-#### Worked example — vague vs structured
+#### Worked examples (few-shot — all data fictional)
 
 ❌ Vague (improvisation-prone):
 
 > "El usuario quiere cancelar un pedido."
 
-What flaps: does the user know the ID? Give it when? Confirm when asked? Accept a reschedule offer? Every run answers these differently.
+What flaps: does the user know the ID? Give it when? Confirm when asked? Accept a reschedule offer? Every run answers these differently. Ten simultaneous runs of a suite written in the structured style produced **zero verdict flips** — the residual variance was infrastructure, not simulation.
 
-✅ Structured: the template above. Ten simultaneous runs of a suite written in this style produced **zero verdict flips** — the residual variance was infrastructure, not simulation.
+✅ **Example 1 — refusal case** (user never provides the datum; note `entrega: "nunca"` + the `tool_not_called` guard):
+
+```json
+{
+  "name": "cancelar-sin-id-no-ejecuta",
+  "scenario": {
+    "persona": "cliente impaciente, tutea",
+    "objetivo": "cancelar un pedido del que no recuerda el número",
+    "datos": [{"dato": "número de pedido", "entrega": "nunca"}],
+    "reacciones": [
+      {"si": "pide el número de pedido", "entonces": "decir que no lo encuentra, aunque insista"},
+      {"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"},
+      {"si": "deriva a una persona", "entonces": "aceptar y despedirse"}
+    ],
+    "terminacion": "El asistente pidió el número de pedido y quedó esperándolo o derivó"
+  },
+  "assertions": [
+    {"type": "tool_not_called", "name": "cancelar-pedido"},
+    {"type": "text", "criteria": "El asistente pide el número de pedido antes de intentar cancelar"}
+  ]
+}
+```
+
+✅ **Example 2 — precondition-forced flow** (the assertion needs the user to withhold the ID first; note `si_lo_piden` + `first_message` pinned via `primer_mensaje`):
+
+```json
+{
+  "name": "tracking-pide-id-primero",
+  "scenario": {
+    "persona": "cliente ansioso por su compra, tutea",
+    "objetivo": "saber dónde está el envío de su pedido",
+    "datos": [{"dato": "pedido=88421", "entrega": "si_lo_piden"}],
+    "reacciones": [
+      {"si": "pide el ID del pedido", "entonces": "darlo"},
+      {"si": "informa el estado del envío", "entonces": "agradecer"}
+    ],
+    "primer_mensaje": "Hola! ¿me decís dónde está mi envío?",
+    "terminacion": "El asistente informó el estado del envío del pedido"
+  },
+  "assertions": [
+    {"type": "text", "criteria": "El asistente pide el ID del pedido antes de informar el estado del envío"},
+    {"type": "tool_called", "name": "obtener-estado-envio"}
+  ],
+  "tool_mocks": {
+    "obtener-estado-envio": {
+      "match_kind": "any",
+      "return_value": {"order_id": 88421, "delivery_status": "en_camino", "eta_hours": 24}
+    }
+  }
+}
+```
+
+✅ **Example 3 — off-topic redirect with skill check** (structured assertions carry the behavior; the judge only grades what was said):
+
+```json
+{
+  "name": "duplicado-insistente-usa-skill",
+  "scenario": {
+    "persona": "cliente molesto porque ya consultó antes, tutea",
+    "objetivo": "que le resuelvan un reclamo que dice haber hecho ayer por el pedido 88421",
+    "datos": [{"dato": "pedido=88421", "entrega": "de_entrada"}],
+    "reacciones": [
+      {"si": "reconoce la consulta previa y registra el seguimiento", "entonces": "agradecer"},
+      {"si": "trata el reclamo como nuevo", "entonces": "insistir en que es la segunda vez que escribe"}
+    ],
+    "terminacion": "El asistente reconoció la consulta previa y registró el seguimiento"
+  },
+  "assertions": [
+    {"type": "skill_loaded", "skill": "check-duplicates"},
+    {"type": "text", "criteria": "El asistente reconoce que existe una consulta previa sobre el mismo tema"}
+  ]
+}
+```
+
+> These examples use a fictional storefront (order `88421`, generic tool names). **Never copy real customer data, credentials, internal URLs or production identifiers into a case or into this skill — both are public surfaces.** When you need realistic values for a real business, ask the user (see Hard rules).
 
 ### Assertion types — pick the right tool for each check
 
