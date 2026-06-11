@@ -39,16 +39,19 @@ Create a single eval test case for a playbook.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique name (lowercase with dashes) |
-| `scenario` | string | Yes | User scenario description for the simulator |
-| `termination` | string | Yes | Expected outcome condition |
-| `first_message` | string | No | Exact first message (LLM generates if omitted) |
+| `scenario` | string \| object | Yes* | **Polymorphic**: free text (legacy) or the structured scenario JSON directly (same shape as `scenario_blocks`). Prefer the structured form for all new cases. |
+| `scenario_blocks` | object | No | Structured scenario v2: `{persona?, objetivo, datos[], reacciones[], catch_all?, cierre?, primer_mensaje?, terminacion?}`. When present it is the source of truth — the server renders the canonical text into `scenario` (responses always carry BOTH: `scenario` as rendered text for legacy readers + `scenario_blocks` as the structure). `datos[]` items: `{dato, entrega: "de_entrada"|"si_lo_piden"|"nunca"}`. `reacciones[]` items: `{si, entonces}`. `primer_mensaje`/`terminacion` project onto the case's `first_message`/`termination`. |
+| `termination` | string | Yes* | Expected outcome condition. *Either here or as `scenario_blocks.terminacion`. |
+| `first_message` | string | No | Exact first message (LLM generates if omitted). May also come from `scenario_blocks.primer_mensaje`. |
 | `max_turns` | int | No | Max turns (1-50, default: 10) |
-| `assertions` | array | No | List of typed assertion objects — see [Assertion Types](#assertion-types) below for the full discriminated union (`text`, `tool_called`, `tool_not_called`, `tool_call_sequence`, `handoff`, `handoff_to_agent`, `handoff_to_team`, `no_handoff`, `priority_set`, `tag_added`, `private_note_contains`). |
+| `assertions` | array | No | List of typed assertion objects — see [Assertion Types](#assertion-types) below for the full discriminated union (`text`, `tool_called`, `tool_not_called`, `tool_call_sequence`, `handoff`, `handoff_to_agent`, `handoff_to_team`, `no_handoff`, `priority_set`, `tag_added`, `private_note_contains` / `skill_loaded`). |
 | `assertion_tags` | array | No | Legacy: `["tag1", "tag2"]` — tags the assistant should apply. Prefer `tag_added` assertions in new cases. |
 | `tool_mocks` | object | No | Stub specific tools with canned responses for this case. See [Tool Mocks](#tool-mocks) below. |
 | `user_context` | object | No | Per-case user context; merges over the run-level `user_context` (case wins). Use for case-specific user attributes or `eval_overrides`. |
 
 **Response:** `EvalCase` object with `id`, `created_at`, `is_enabled`, etc.
+
+> **PATCH semantics for scenarios**: sending `scenario_blocks` (or `scenario` as JSON) re-renders the text and keeps the case structured (v2). Sending `scenario` as plain TEXT on a case that had blocks **clears the stale blocks** — the text becomes the source of truth.
 
 ### Tool Mocks
 
@@ -335,7 +338,7 @@ Triggers an evaluation run in the background. Returns immediately with a pending
 
 The run executes asynchronously:
 1. Status changes to `running` when execution starts
-2. `passed_cases` and `failed_cases` update as each case completes
+2. `passed_cases`, `failed_cases` and `error_cases` update as each case completes (`error_cases` = infra aborts, counted apart so they never read as regressions)
 3. Status changes to `completed` (or `failed`/`cancelled`) when done
 
 ### Model strings
@@ -425,13 +428,26 @@ id                      string  Result ID
 case_id                 string  Test case ID
 case_name               string  Test case name
 case_scenario           string  Scenario description
-status                  string  "passed", "failed", or "error"
+status                  string  "passed" (no failed assertions), "failed"
+                                (≥1 failed assertion), or "error" (eval
+                                INFRA failure — provider 429s/timeouts that
+                                survived retries, unparseable judge output;
+                                re-run, don't read as a regression)
 total_assertions        int     Total assertion count
-passed_assertions       int     Passed count
-failed_assertions       int     Failed count
+passed_assertions       int     Passed count (excludes ambiguous)
+failed_assertions       int     Failed count (excludes ambiguous)
 assertion_results       array   Per-assertion details
   criteria              string  The criteria evaluated
-  passed                bool    Whether it passed
+  passed                bool    Legacy binary — ambiguous maps to true;
+                                prefer `verdict`
+  verdict               string  "passed" | "failed" | "ambiguous" (null on
+                                rows persisted before the field existed).
+                                "ambiguous" = the criterion is too vague to
+                                verify objectively — a lint on the test, it
+                                never fails the case
+  rewrite_suggestion    string  Only on ambiguous verdicts: judge-proposed
+                                rewrite of the criterion into something
+                                objectively verifiable
   explanation           string  LLM explanation of why
 tag_results             object  {tag_name: bool} — tag assertion results
 conversation            array   The simulated conversation

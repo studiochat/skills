@@ -56,7 +56,7 @@ def main():
     parser.add_argument("-o", "--output", default=None, help="Output file path (default: stdout)")
     args = parser.parse_args()
 
-    api_url = "https://api.studiochat.io"
+    api_url = os.environ.get("STUDIO_API_URL", "https://api.studiochat.io")
     api_token = os.environ.get("STUDIO_API_TOKEN")
 
     if not api_token:

@@ -32,6 +32,8 @@ Set the following environment variables before using the scripts:
 ```bash
 export STUDIO_API_TOKEN="sbs_your_api_key_here"
 export STUDIO_PROJECT_ID="your-project-uuid"
+# Optional — point the scripts at a different backend (e.g. local dev):
+# export STUDIO_API_URL="http://localhost:8000"
 ```
 
 API keys are available by request from the Studio Chat team at hey@studiochat.io.
@@ -327,7 +329,7 @@ For each test case, the system:
 
 1. **Generates a user message** — either the exact `first_message` or an LLM-generated message based on the scenario
 2. **Sends it to the assistant** — calls the actual playbook agent with the message
-3. **Checks termination** — an LLM judges whether the expected outcome was reached
+3. **Checks termination** — an LLM judges whether the expected outcome has ALREADY occurred (a promised/imminent outcome doesn't count; outcomes that are assistant actions — handoff, tag, note — are checked against the real emitted events). Write `termination` as an observable, completed fact: "el asistente derivó la conversación", not "el usuario quedará conforme"
 4. **Repeats** — generates the next user message based on the scenario + conversation so far
 5. **Evaluates assertions** — after the conversation ends, each assertion is evaluated by an LLM judge
 6. **Checks tags** — verifies expected tags were applied during the conversation
@@ -444,6 +446,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 
 | Slug | Notes |
 |---|---|
+| `google/gemini-3.1-flash-lite` | **Recommended simulator + judge** for high-volume suites: validated verdict quality, ~15x cheaper than the gpt-4o default, and supports the flex service tier (eval runs request it automatically, ~50% off). |
 | `google/gemini-2.5-flash` | Newest stable Flash. |
 | `google/gemini-2.5-flash-lite` | Cheaper Flash variant. |
 | `google/gemini-2.0-flash-001` | Previous Flash generation. |
@@ -828,13 +831,180 @@ Use this when one case needs a different user identity, plan, or simulated state
 
 ## Writing Good Test Cases
 
-### Scenario Guidelines
+### Scenario Guidelines — the structured scenario framework
 
-The scenario tells the **simulated user** how to behave. Write it from the user's perspective:
+#### The concept
 
-- Describe what the user wants, not what the assistant should do
-- Include constraints: "the user is impatient," "the user doesn't have their order number"
-- Keep it focused — one scenario per case
+The scenario **programs the simulated user** — it is the only script the simulator has. In the structured framework the scenario is not prose: it is a typed object (`scenario_blocks`) that the simulator executes like a **character sheet with a decision table**:
+
+```
+persona     → WHO YOU ARE          (identity, register, language)
+objetivo    → YOUR GOAL            (every message must move toward it)
+datos[]     → DATA YOU HOLD        (exact values + a hard delivery rule each)
+reacciones[]→ DECISION TABLE       (assistant move → user response, matched
+              + catch_all            top-to-bottom on EVERY turn)
+cierre      → CLOSING RULE         (how to end, in ONE message)
+```
+
+Why this exists: a prose scenario leaves every unstated decision to improvisation — does the user know the ID? volunteer it or wait? accept the alternative the assistant offers? — and improvisation is exactly where conversations (and verdicts) diverge between runs. The structure removes those degrees of freedom. Ten simultaneous runs of a suite written in this framework produced **zero verdict flips**; the residual variance was infrastructure, not simulation.
+
+Two more fields travel with the scenario and project onto the case: `primer_mensaje` (becomes the case's `first_message` — pins turn 1 verbatim, no LLM) and `terminacion` (becomes `termination` — the run stops when this outcome has occurred).
+
+#### What the simulator does with each field
+
+This is the contract that makes each field matter — author them knowing how they execute:
+
+| Field | The simulator is told... | Without it |
+|---|---|---|
+| `persona` | "WHO YOU ARE: …" — identity, register (tuteo/usted), language | Register/language drift between runs (a Portuguese case simulated in Spanish) |
+| `objetivo` (**required**) | "YOUR GOAL — every message you write must move toward it" | The conversation wanders and `terminacion` has nothing crisp to detect |
+| `datos[]` | "DATA YOU HOLD — data not listed here **does not exist for you: never invent IDs, amounts, dates or emails**", plus one hard rule per datum (see delivery policies below) | The simulator invents IDs your mocks don't match, or hands data over too early — killing "asks for the ID **before** acting" assertions |
+| `reacciones[]` | "DECISION TABLE — before writing each message, match the assistant's LAST message against these branches, top to bottom, and obey the first match" | The assistant's counter-moves are unpredictable; without branch instructions the simulator improvises: accepts alternatives it should refuse, drops refusals, invents answers |
+| `catch_all` | The decision table's final row: "Anything else: …" (default: answer briefly and neutrally, never invent data) | The branch you didn't predict derails the case |
+| `cierre` | "CLOSING RULE: … Close in ONE short message; never stretch goodbyes" | 12-turn farewell loops that burn tokens and add late-conversation noise |
+
+**Delivery policies** (`entrega`, one per datum) — these are verbatim hard rules in the simulator's prompt:
+
+| `entrega` | The simulator must... | Use it for |
+|---|---|---|
+| `de_entrada` | include the datum in its FIRST message, verbatim | Skipping the ask-for-it dance when it's not what the case tests |
+| `si_lo_piden` | reveal it ONLY after the assistant explicitly asks — never volunteer it | Exercising "asks before acting" assertions (the precondition is forced) |
+| `nunca` | NEVER reveal it: say it doesn't have it / can't find it, and hold that refusal even under insistence | Refusal cases — pair with a `tool_not_called` guard |
+
+#### The complete shape
+
+`POST /playbooks/{base_id}/eval-cases` — the `scenario` field accepts the structure directly (or use `scenario_blocks`; both are equivalent). The server renders canonical prose into `scenario` for legacy readers; you never write prose yourself:
+
+```json
+{
+  "name": "cancelar-pedido-confirma",
+  "scenario": {
+    "persona": "cliente existente, apurado pero educado. Tutea. Habla español.",
+    "objetivo": "cancelar el pedido 88421",
+    "datos": [{"dato": "pedido=88421", "entrega": "si_lo_piden"}],
+    "reacciones": [
+      {"si": "pide el ID del pedido", "entonces": "darlo"},
+      {"si": "pide confirmación para cancelar", "entonces": "confirmar que sí, está seguro"},
+      {"si": "ofrece alternativas como reprogramar la entrega", "entonces": "rechazarlas, solo quiere cancelar"},
+      {"si": "deriva a una persona del equipo", "entonces": "aceptar y despedirse"}
+    ],
+    "terminacion": "El asistente confirmó la cancelación del pedido"
+  },
+  "assertions": [
+    {"type": "tool_called", "name": "cancelar-pedido"},
+    {"type": "text", "criteria": "El asistente confirma al usuario que el pedido quedó cancelado"}
+  ],
+  "tool_mocks": {
+    "cancelar-pedido": {"match_kind": "any", "return_value": {"order_id": 88421, "cancelled": true}}
+  }
+}
+```
+
+Optional fields and their defaults: `catch_all` ("responder breve y neutro, sin inventar datos"), `cierre` (close in ONE message when the goal is met), `primer_mensaje` (omitted → the simulator opens according to the goal), `terminacion` (may instead be given as the case's top-level `termination`).
+
+#### Authoring procedure — write every case in this order
+
+1. **Read the playbook** (builder skill). Every playbook rule that can fire on this flow is a branch the assistant might take — this is your raw material for `reacciones` and the source of truth the case must not contradict.
+2. **Pick ONE `objetivo`**, observable. Write `terminacion` as the same fact already occurred: objetivo "cancelar el pedido 88421" → terminacion "El asistente confirmó la cancelación del pedido". They are two views of one fact.
+3. **List the `datos`** the flow needs, with exact literal values. **If you don't know what realistic values look like in this business — ask the user. Never invent** (see Hard rules). Choose each `entrega` deliberately: it is the lever that forces (or forbids) the preconditions your assertions need.
+4. **Enumerate `reacciones`** from the playbook rules. The near-universal branch set: asks for a datum / asks for confirmation / offers an alternative / hands off to a human — plus whatever is specific to this flow. Everything else falls to `catch_all`.
+5. **Pin `primer_mensaje`** if the opening matters to the case; otherwise let the simulator open from the goal.
+6. **Write `tool_mocks`** that reuse the exact `datos` values and mirror the real API's shape (list endpoints lean, detail endpoints rich).
+7. **Write assertions**: structured types for what the assistant *does* (tools, tags, handoff, skills), `text` only for what it *says*.
+
+#### Hard rules
+
+- **NEVER invent business data — ask first.** The `datos` block and the `tool_mocks` need realistic, consistent values (order IDs, product names, amounts, dates). If you don't know what those look like in this business — what products exist, what an order ID format is, which states an order can be in — **stop and ask the user** before authoring the case. An invented datum produces a case that tests a flow the business doesn't have, and mocks that drift from the real API shape. Asking costs one message; a suite built on invented data costs every future debugging session.
+- **The scenario describes the USER, never the assistant.** "El asistente deberá pedir el ID" does not belong in a scenario — that's an assertion. A scenario that scripts the assistant confuses the simulator into playing both roles.
+- **One objective per scenario.** Two goals ("cancelar el pedido y de paso preguntar precios") produce conversations that satisfy assertions in unpredictable order. Split into two cases.
+- **Refusals must be explicit and covered against insistence.** A refusal case needs `entrega: "nunca"` AND a reaction for the assistant's follow-up attempts (e.g. `{"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"}`). The simulator holds refusals the scenario dictates — but only those.
+- **Don't contradict the playbook**: a case expecting "indaga antes de derivar" while the scenario has the user demanding a human (which the playbook answers with an immediate handoff) will flip forever. Align the expectation with the playbook rule, or change the scenario trigger.
+- **Mocks must mirror the real API's shape**: if the list endpoint mock includes prices, the assistant never needs the detail tool — and your `tool_called` assertion fails for the wrong reason.
+- **Free text is legacy.** The `scenario` field still accepts plain prose for old cases; never author new cases that way.
+
+#### Worked examples (few-shot — all data fictional)
+
+❌ Vague (improvisation-prone):
+
+> "El usuario quiere cancelar un pedido."
+
+What flaps: does the user know the ID? Give it when? Confirm when asked? Accept a reschedule offer? Every run answers these differently. Ten simultaneous runs of a suite written in the structured style produced **zero verdict flips** — the residual variance was infrastructure, not simulation.
+
+✅ **Example 1 — refusal case** (user never provides the datum; note `entrega: "nunca"` + the `tool_not_called` guard):
+
+```json
+{
+  "name": "cancelar-sin-id-no-ejecuta",
+  "scenario": {
+    "persona": "cliente impaciente, tutea",
+    "objetivo": "cancelar un pedido del que no recuerda el número",
+    "datos": [{"dato": "número de pedido", "entrega": "nunca"}],
+    "reacciones": [
+      {"si": "pide el número de pedido", "entonces": "decir que no lo encuentra, aunque insista"},
+      {"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"},
+      {"si": "deriva a una persona", "entonces": "aceptar y despedirse"}
+    ],
+    "terminacion": "El asistente pidió el número de pedido y quedó esperándolo o derivó"
+  },
+  "assertions": [
+    {"type": "tool_not_called", "name": "cancelar-pedido"},
+    {"type": "text", "criteria": "El asistente pide el número de pedido antes de intentar cancelar"}
+  ]
+}
+```
+
+✅ **Example 2 — precondition-forced flow** (the assertion needs the user to withhold the ID first; note `si_lo_piden` + `first_message` pinned via `primer_mensaje`):
+
+```json
+{
+  "name": "tracking-pide-id-primero",
+  "scenario": {
+    "persona": "cliente ansioso por su compra, tutea",
+    "objetivo": "saber dónde está el envío de su pedido",
+    "datos": [{"dato": "pedido=88421", "entrega": "si_lo_piden"}],
+    "reacciones": [
+      {"si": "pide el ID del pedido", "entonces": "darlo"},
+      {"si": "informa el estado del envío", "entonces": "agradecer"}
+    ],
+    "primer_mensaje": "Hola! ¿me decís dónde está mi envío?",
+    "terminacion": "El asistente informó el estado del envío del pedido"
+  },
+  "assertions": [
+    {"type": "text", "criteria": "El asistente pide el ID del pedido antes de informar el estado del envío"},
+    {"type": "tool_called", "name": "obtener-estado-envio"}
+  ],
+  "tool_mocks": {
+    "obtener-estado-envio": {
+      "match_kind": "any",
+      "return_value": {"order_id": 88421, "delivery_status": "en_camino", "eta_hours": 24}
+    }
+  }
+}
+```
+
+✅ **Example 3 — off-topic redirect with skill check** (structured assertions carry the behavior; the judge only grades what was said):
+
+```json
+{
+  "name": "duplicado-insistente-usa-skill",
+  "scenario": {
+    "persona": "cliente molesto porque ya consultó antes, tutea",
+    "objetivo": "que le resuelvan un reclamo que dice haber hecho ayer por el pedido 88421",
+    "datos": [{"dato": "pedido=88421", "entrega": "de_entrada"}],
+    "reacciones": [
+      {"si": "reconoce la consulta previa y registra el seguimiento", "entonces": "agradecer"},
+      {"si": "trata el reclamo como nuevo", "entonces": "insistir en que es la segunda vez que escribe"}
+    ],
+    "terminacion": "El asistente reconoció la consulta previa y registró el seguimiento"
+  },
+  "assertions": [
+    {"type": "skill_loaded", "skill": "check-duplicates"},
+    {"type": "text", "criteria": "El asistente reconoce que existe una consulta previa sobre el mismo tema"}
+  ]
+}
+```
+
+> These examples use a fictional storefront (order `88421`, generic tool names). **Never copy real customer data, credentials, internal URLs or production identifiers into a case or into this skill — both are public surfaces.** When you need realistic values for a real business, ask the user (see Hard rules).
 
 ### Assertion types — pick the right tool for each check
 
@@ -859,12 +1029,20 @@ The `--judge-model` flag affects only text assertions. Structured assertions ign
 {"criteria": "The assistant asks for the order number before proceeding"}
 ```
 
-Write the criteria as a clear, verifiable statement:
+**The judge returns a TERNARY verdict** — `AssertionResult.verdict` is `passed`, `failed`, or **`ambiguous`** (the legacy `passed` boolean maps `ambiguous` → `true`). See [The `ambiguous` verdict](#the-ambiguous-verdict--criteria-lint) below: a criterion too vague to verify objectively doesn't get a guessed binary verdict — it gets flagged for rewrite.
 
-- ✅ "The assistant mentions the 30-day refund policy"
-- ✅ "The assistant asks for the order number before proceeding"
-- ❌ "The assistant is helpful" (too vague)
-- ❌ "Response time is under 2 seconds" (not evaluable from text)
+**Rules for writing criteria that never come back ambiguous** (each rule maps to a real flakiness pattern found in production suites):
+
+1. **Binary and observable.** The criterion must describe something two independent judges would always score identically: a concrete behavior, a phrase category, a countable action.
+   - ✅ "El asistente menciona la política de reembolso de 30 días"
+   - ✅ "El asistente incluye al menos una frase de empatía (p. ej. 'lamento lo que pasó')"
+   - ❌ "El asistente responde cordial" → `ambiguous` (cualidad indefinida)
+   - ❌ "El asistente usa un tono muy empático" → `ambiguous` (palabra de grado sin umbral: "muy", "bastante", "suficientemente")
+2. **One check per criterion.** Split compound criteria — "hace X **y** explica Y" becomes two assertions; each shows its own verdict in the diff view. Alternatives with "o" are supported (passes if ANY branch holds) but make failures harder to read.
+3. **Negations are reliable.** "El asistente NO hace X" passes when X is absent — the judge is explicitly instructed that absence alone satisfies a negated criterion. Don't avoid them.
+4. **Conditional criteria need the scenario to force the condition.** "Si el usuario insulta, el asistente deriva" passes *vacuously* when the simulated user never insults — the criterion tested nothing. If you write "cuando Y, entonces X", the `scenario` must make Y actually happen.
+5. **Semantic match, not literal.** The assistant doesn't need the criterion's exact words — an equivalent paraphrase in any language satisfies it. Don't write criteria that demand specific phrasings unless the phrasing itself is the requirement.
+6. **The judge sees the assistant's actions.** Each assistant turn carries an `[actions: handoff_agent, label=..., note]` line in the judge's view, so criteria like "deriva la conversación" are judged against the real event — but prefer the structured assertion (`handoff`, `tag_added`, …) whenever one exists: deterministic beats judged.
 
 #### `tool_called` — a specific tool was invoked
 
@@ -969,6 +1147,16 @@ There's also a **legacy** `assertion_tags: ["billing", "escalation"]` field on t
 
 > **Tag whitelist gotcha.** The platform only applies tags that are in the playbook's supported set, which is parsed from **single-backtick-wrapped** tag values in the instructions + skills. If a `tag_added` assertion fails even though the assistant "tried" to tag, check that the tag value is wrapped in backticks somewhere in the instructions/skills — an un-backticked tag is dropped at runtime. Conversely, never wrap non-tag tokens (status values, field names, tool IDs) in single backticks: they get parsed as fake tags. When iterating on skill content via `--skills-file`, follow the same backtick policy (see the **Tagging** section of the `builder` skill).
 
+#### `skill_loaded` — the agent loaded a skill (casuística)
+
+```json
+{"type": "skill_loaded", "skill": "check-duplicates"}
+```
+
+First-class skill check: asserts the agent loaded the named skill during the conversation (`"skill": null` or omitted matches *any* skill load). Internally it verifies the `load_skill` tool trace — skills ARE loaded via a tool under the hood — but you declare it, and results explain it, in skill terms ("skill 'check-duplicates' loaded at turn 2"). Never reach for `{"type": "tool_called", "name": "load_skill"}` — it can't target a specific skill and leaks the implementation detail.
+
+This is also the assertion that catches the classic playbook bug where instructions reference `{{ skill: x }}` but the skill doesn't exist on the version: the load can never happen, so the assertion fails loudly.
+
 #### `private_note_contains` — a private note's content contains a substring
 
 ```json
@@ -980,6 +1168,29 @@ There's also a **legacy** `assertion_tags: ["billing", "escalation"]` field on t
 ```
 
 Useful when the playbook is supposed to write specific context into a private note for the next human agent. `case_insensitive` defaults to `true`.
+
+### The `ambiguous` verdict — criteria lint
+
+When a text criterion hinges on an intensity qualifier ("muy", "bastante") or an undefined subjective quality ("cordial", "natural", "tono adecuado") and the conversation doesn't satisfy or violate it in an extreme, unmistakable way, the judge does NOT guess. It returns:
+
+```json
+{
+  "verdict": "ambiguous",
+  "explanation": "criterio subjetivo: una sola frase de empatía seguida de texto procedural",
+  "rewrite_suggestion": "El asistente reconoce explícitamente la frustración del usuario con al menos una frase que valide la dificultad"
+}
+```
+
+What this means in practice:
+
+- **An ambiguous assertion never fails the case.** The case status is computed from `failed` verdicts only. Ambiguous is a *lint on the test*, not a verdict on the assistant.
+- **`rewrite_suggestion` is the fix.** It's a judge-proposed replacement criterion, in the same language as the original, that is objectively verifiable and captures the apparent intent. The UI renders it in a violet hint box (run results and dry-run panel).
+- **The workflow:** run the suite → collect every `ambiguous` → apply the suggested rewrites via `PATCH /eval-cases/{id}` (review them first — the judge captures *apparent* intent) → re-run. A healthy suite has zero ambiguous verdicts; each one that appears is the system telling you exactly which test to fix and how.
+- A criterion that is vague but *unmistakably* satisfied or violated still gets a normal verdict — ambiguous only fires on the genuinely undecidable borderline (one formulaic "entiendo tu frustración" against "tono MUY empático" is the canonical example).
+
+### Internal errors vs failed cases
+
+`EvalResult.status` distinguishes `failed` (assertions failed — a verdict on the assistant) from **`error`** (eval infrastructure failed — provider 429s that survived the retry backoff, timeouts, unparseable judge output). Errors count under `EvalRun.error_cases`, never under `failed_cases`, and render amber in the UI. If a run shows internal errors, re-run it — don't read them as regressions. Eval-side LLM calls already retry with exponential backoff (up to 6 attempts, `Retry-After`-aware) before giving up.
 
 ### Combined examples
 
@@ -1035,6 +1246,7 @@ A handoff-on-failure case for a standalone account:
 | Did the assistant set conversation priority? | `priority_set` |
 | Did the assistant apply tag X? | `tag_added` |
 | Did the assistant write a private note containing X? | `private_note_contains` |
+| Did the agent load skill X (casuística)? | `skill_loaded` |
 
 > **Reminder**: events (`priority`, `label`, `note`, `handoff_*`) cannot be **mocked** with `tool_mocks` because they're not tool calls — they're items in the LLM's structured output. But they CAN be **asserted** with the structured assertions above. The two features are complementary: mocks shape the inputs the agent sees during the run; assertions verify the side effects (events + tool calls) it produced.
 
@@ -1199,11 +1411,23 @@ print("\nFailed cases:")
 for r in results:
     if r["status"] != "passed":
         print(f"\n  [{r.get('case_name', r['case_id'])}] — {r['status']}")
+        if r["status"] == "error":
+            # Internal error (infra), not an assistant failure — re-run, don't diagnose.
+            print(f"    internal error: {r.get('error_message')}")
+            continue
         for a in r.get("assertion_results", []):
-            status = "PASS" if a["passed"] else "FAIL"
-            print(f"    [{status}] {a['criteria']}")
-            if not a["passed"]:
+            verdict = a.get("verdict") or ("passed" if a["passed"] else "failed")
+            print(f"    [{verdict.upper()}] {a['criteria']}")
+            if verdict == "failed":
                 print(f"           {a['explanation']}")
+
+# Criteria lint: every ambiguous verdict is a test to rewrite (suite-wide, not just failed cases)
+print("\nAmbiguous criteria (rewrite these):")
+for r in results:
+    for a in r.get("assertion_results", []):
+        if a.get("verdict") == "ambiguous":
+            print(f"  - [{r.get('case_name')}] {a['criteria']}")
+            print(f"    sugerencia: {a.get('rewrite_suggestion')}")
 ```
 
 ### Example: Compare Two Versions

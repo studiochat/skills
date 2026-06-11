@@ -291,7 +291,7 @@ def main():
     args = parser.parse_args()
 
     # Environment
-    base_url = "https://api.studiochat.io"
+    base_url = os.environ.get("STUDIO_API_URL", "https://api.studiochat.io")
     token = os.environ.get("STUDIO_API_TOKEN")
     project_id = os.environ.get("STUDIO_PROJECT_ID")
 
