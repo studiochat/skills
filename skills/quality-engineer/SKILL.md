@@ -1035,6 +1035,16 @@ There's also a **legacy** `assertion_tags: ["billing", "escalation"]` field on t
 
 > **Tag whitelist gotcha.** The platform only applies tags that are in the playbook's supported set, which is parsed from **single-backtick-wrapped** tag values in the instructions + skills. If a `tag_added` assertion fails even though the assistant "tried" to tag, check that the tag value is wrapped in backticks somewhere in the instructions/skills — an un-backticked tag is dropped at runtime. Conversely, never wrap non-tag tokens (status values, field names, tool IDs) in single backticks: they get parsed as fake tags. When iterating on skill content via `--skills-file`, follow the same backtick policy (see the **Tagging** section of the `builder` skill).
 
+#### `skill_loaded` — the agent loaded a skill (casuística)
+
+```json
+{"type": "skill_loaded", "skill": "check-duplicates"}
+```
+
+First-class skill check: asserts the agent loaded the named skill during the conversation (`"skill": null` or omitted matches *any* skill load). Internally it verifies the `load_skill` tool trace — skills ARE loaded via a tool under the hood — but you declare it, and results explain it, in skill terms ("skill 'check-duplicates' loaded at turn 2"). Never reach for `{"type": "tool_called", "name": "load_skill"}` — it can't target a specific skill and leaks the implementation detail.
+
+This is also the assertion that catches the classic playbook bug where instructions reference `{{ skill: x }}` but the skill doesn't exist on the version: the load can never happen, so the assertion fails loudly.
+
 #### `private_note_contains` — a private note's content contains a substring
 
 ```json
@@ -1124,6 +1134,7 @@ A handoff-on-failure case for a standalone account:
 | Did the assistant set conversation priority? | `priority_set` |
 | Did the assistant apply tag X? | `tag_added` |
 | Did the assistant write a private note containing X? | `private_note_contains` |
+| Did the agent load skill X (casuística)? | `skill_loaded` |
 
 > **Reminder**: events (`priority`, `label`, `note`, `handoff_*`) cannot be **mocked** with `tool_mocks` because they're not tool calls — they're items in the LLM's structured output. But they CAN be **asserted** with the structured assertions above. The two features are complementary: mocks shape the inputs the agent sees during the run; assertions verify the side effects (events + tool calls) it produced.
 

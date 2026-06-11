@@ -43,7 +43,7 @@ Create a single eval test case for a playbook.
 | `termination` | string | Yes | Expected outcome condition |
 | `first_message` | string | No | Exact first message (LLM generates if omitted) |
 | `max_turns` | int | No | Max turns (1-50, default: 10) |
-| `assertions` | array | No | List of typed assertion objects — see [Assertion Types](#assertion-types) below for the full discriminated union (`text`, `tool_called`, `tool_not_called`, `tool_call_sequence`, `handoff`, `handoff_to_agent`, `handoff_to_team`, `no_handoff`, `priority_set`, `tag_added`, `private_note_contains`). |
+| `assertions` | array | No | List of typed assertion objects — see [Assertion Types](#assertion-types) below for the full discriminated union (`text`, `tool_called`, `tool_not_called`, `tool_call_sequence`, `handoff`, `handoff_to_agent`, `handoff_to_team`, `no_handoff`, `priority_set`, `tag_added`, `private_note_contains` / `skill_loaded`). |
 | `assertion_tags` | array | No | Legacy: `["tag1", "tag2"]` — tags the assistant should apply. Prefer `tag_added` assertions in new cases. |
 | `tool_mocks` | object | No | Stub specific tools with canned responses for this case. See [Tool Mocks](#tool-mocks) below. |
 | `user_context` | object | No | Per-case user context; merges over the run-level `user_context` (case wins). Use for case-specific user attributes or `eval_overrides`. |
