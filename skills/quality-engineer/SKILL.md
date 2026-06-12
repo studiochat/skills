@@ -927,7 +927,7 @@ How the verdict happens: the simulator checks termination **when generating each
 
 What this means when authoring:
 
-1. **A failing gate is a scenario bug, not an assistant bug** (usually). The simulated user never drove the conversation to the outcome: a missing reaction branch, a missing datum, a `primer_mensaje` that starts the wrong flow, or a `terminacion` that describes something unobservable. Fix the scenario before touching the playbook.
+1. **A failing gate is a scenario bug, not an assistant bug** (usually). The simulated user never drove the conversation to the outcome: a missing reaction branch, a missing datum, a `primer_mensaje` that starts the wrong flow, or a `terminacion` that describes something unobservable. Fix the scenario before touching the playbook. **Tell-tale sign of a missing datum**: the simulated user re-greets or restates its opening mid-conversation — it was asked for something it doesn't hold (e.g. an order number) and, forbidden from inventing, it loops back to its request. Add the datum to `datos[]` (or, if the case is ABOUT not having it, cover the assistant's insistence in `reacciones`).
 2. **`terminacion` must be observable and reachable.** Write it as a fact that will have already occurred ("El asistente confirmó la cancelación"), achievable within `max_turns`. A terminacion like "el cliente queda satisfecho" can never be detected — the gate will fail forever.
 3. **Don't duplicate the gate.** You no longer need an authored assertion that restates the termination ("el asistente confirma la cancelación" as a text assertion AND as terminacion) — the gate already grades it.
 
