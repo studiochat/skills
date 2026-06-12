@@ -840,7 +840,7 @@ The scenario **programs the simulated user** — it is the only script the simul
 ```
 persona     → WHO YOU ARE          (identity, register, language)
 objetivo    → YOUR GOAL            (every message must move toward it)
-datos[]     → DATA YOU HOLD        (exact values + a hard delivery rule each)
+datos[]     → DATA YOU HOLD        (exact values; not listed = doesn't exist)
 reacciones[]→ DECISION TABLE       (assistant move → user response, matched
               + catch_all            top-to-bottom on EVERY turn)
 cierre      → CLOSING RULE         (how to end, in ONE message)
@@ -848,7 +848,7 @@ cierre      → CLOSING RULE         (how to end, in ONE message)
 
 Why this exists: a prose scenario leaves every unstated decision to improvisation — does the user know the ID? volunteer it or wait? accept the alternative the assistant offers? — and improvisation is exactly where conversations (and verdicts) diverge between runs. The structure removes those degrees of freedom. Ten simultaneous runs of a suite written in this framework produced **zero verdict flips**; the residual variance was infrastructure, not simulation.
 
-Two more fields travel with the scenario and project onto the case: `primer_mensaje` (becomes the case's `first_message` — pins turn 1 verbatim, no LLM) and `terminacion` (becomes `termination` — the run stops when this outcome has occurred).
+Two more fields travel with the scenario and project onto the case: `primer_mensaje` (**required** — becomes the case's `first_message`; turn 1 replays it verbatim, no LLM, anchoring the whole conversation) and `terminacion` (becomes `termination` — the run stops when this outcome has occurred).
 
 #### What the simulator does with each field
 
@@ -858,18 +858,18 @@ This is the contract that makes each field matter — author them knowing how th
 |---|---|---|
 | `persona` | "WHO YOU ARE: …" — identity, register (tuteo/usted), language | Register/language drift between runs (a Portuguese case simulated in Spanish) |
 | `objetivo` (**required**) | "YOUR GOAL — every message you write must move toward it" | The conversation wanders and `terminacion` has nothing crisp to detect |
-| `datos[]` | "DATA YOU HOLD — data not listed here **does not exist for you: never invent IDs, amounts, dates or emails**", plus one hard rule per datum (see delivery policies below) | The simulator invents IDs your mocks don't match, or hands data over too early — killing "asks for the ID **before** acting" assertions |
+| `datos[]` | "DATA YOU HOLD — data not listed here **does not exist for you: never invent IDs, amounts, dates or emails**"; each listed datum is shared naturally whenever the assistant asks or it helps the goal | The simulator invents IDs your mocks don't match |
 | `reacciones[]` | "DECISION TABLE — before writing each message, match the assistant's LAST message against these branches, top to bottom, and obey the first match" | The assistant's counter-moves are unpredictable; without branch instructions the simulator improvises: accepts alternatives it should refuse, drops refusals, invents answers |
 | `catch_all` | The decision table's final row: "Anything else: …" (default: answer briefly and neutrally, never invent data) | The branch you didn't predict derails the case |
 | `cierre` | "CLOSING RULE: … Close in ONE short message; never stretch goodbyes" | 12-turn farewell loops that burn tokens and add late-conversation noise |
 
-**Delivery policies** (`entrega`, one per datum) — these are verbatim hard rules in the simulator's prompt:
+**How data works** — three simple rules instead of delivery choreography:
 
-| `entrega` | The simulator must... | Use it for |
-|---|---|---|
-| `de_entrada` | include the datum in its FIRST message, verbatim | Skipping the ask-for-it dance when it's not what the case tests |
-| `si_lo_piden` | reveal it ONLY after the assistant explicitly asks — never volunteer it | Exercising "asks before acting" assertions (the precondition is forced) |
-| `nunca` | NEVER reveal it: say it doesn't have it / can't find it, and hold that refusal even under insistence | Refusal cases — pair with a `tool_not_called` guard |
+1. **Listed = the user has it.** The simulator shares a listed datum naturally whenever the assistant asks for it or it helps the goal. To test "asks for the ID before acting", pin a `primer_mensaje` that doesn't include the ID — the assistant will have to ask.
+2. **Not listed = it does not exist.** The simulator never invents IDs, amounts, dates or emails. A refusal case ("user can't find the order number") is authored by NOT listing the datum, plus a reaction covering the assistant's insistence: `{"si": "pide el número de pedido", "entonces": "decir que no lo encuentra, aunque insista"}`.
+3. **Special delivery behavior = a reaction.** Anything about WHEN or WHETHER to share belongs in `reacciones`, where the branch is explicit and reviewable — never in a per-datum policy.
+
+> Legacy: old cases may carry a per-datum `entrega` policy (`de_entrada`/`si_lo_piden`/`nunca`); they keep their behavior, but don't author new ones.
 
 #### The complete shape
 
@@ -881,13 +881,14 @@ This is the contract that makes each field matter — author them knowing how th
   "scenario": {
     "persona": "cliente existente, apurado pero educado. Tutea. Habla español.",
     "objetivo": "cancelar el pedido 88421",
-    "datos": [{"dato": "pedido=88421", "entrega": "si_lo_piden"}],
+    "datos": [{"dato": "pedido=88421"}],
     "reacciones": [
       {"si": "pide el ID del pedido", "entonces": "darlo"},
       {"si": "pide confirmación para cancelar", "entonces": "confirmar que sí, está seguro"},
       {"si": "ofrece alternativas como reprogramar la entrega", "entonces": "rechazarlas, solo quiere cancelar"},
       {"si": "deriva a una persona del equipo", "entonces": "aceptar y despedirse"}
     ],
+    "primer_mensaje": "Hola, quiero cancelar un pedido",
     "terminacion": "El asistente confirmó la cancelación del pedido"
   },
   "assertions": [
@@ -900,37 +901,100 @@ This is the contract that makes each field matter — author them knowing how th
 }
 ```
 
-Optional fields and their defaults: `catch_all` ("responder breve y neutro, sin inventar datos"), `cierre` (close in ONE message when the goal is met), `primer_mensaje` (omitted → the simulator opens according to the goal), `terminacion` (may instead be given as the case's top-level `termination`).
+Optional fields and their defaults: `catch_all` ("responder breve y neutro, sin inventar datos"), `cierre` (close in ONE message when the goal is met), `terminacion` (may instead be given as the case's top-level `termination`). `primer_mensaje` is **required** (here or as top-level `first_message`).
 
 #### Authoring procedure — write every case in this order
 
 1. **Read the playbook** (builder skill). Every playbook rule that can fire on this flow is a branch the assistant might take — this is your raw material for `reacciones` and the source of truth the case must not contradict.
 2. **Pick ONE `objetivo`**, observable. Write `terminacion` as the same fact already occurred: objetivo "cancelar el pedido 88421" → terminacion "El asistente confirmó la cancelación del pedido". They are two views of one fact.
-3. **List the `datos`** the flow needs, with exact literal values. **If you don't know what realistic values look like in this business — ask the user. Never invent** (see Hard rules). Choose each `entrega` deliberately: it is the lever that forces (or forbids) the preconditions your assertions need.
+3. **List the `datos`** the flow needs, with exact literal values — only what the user actually HAS. **If you don't know what realistic values look like in this business — ask the user. Never invent** (see Hard rules). To exercise "asks before acting" preconditions, pin a `primer_mensaje` without the datum; to author refusals, leave the datum out and cover insistence in `reacciones`.
 4. **Enumerate `reacciones`** from the playbook rules. The near-universal branch set: asks for a datum / asks for confirmation / offers an alternative / hands off to a human — plus whatever is specific to this flow. Everything else falls to `catch_all`.
-5. **Pin `primer_mensaje`** if the opening matters to the case; otherwise let the simulator open from the goal.
-6. **Write `tool_mocks`** that reuse the exact `datos` values and mirror the real API's shape (list endpoints lean, detail endpoints rich).
-7. **Write assertions**: structured types for what the assistant *does* (tools, tags, handoff, skills), `text` only for what it *says*.
+5. **Write `primer_mensaje`** (required): the exact opening message, replayed verbatim. It anchors the whole conversation and controls which data the user volunteers upfront.
+6. **Set `max_turns` as a generous resolution budget**: estimate the round-trips the flow needs and add 2–3 of margin. It answers *"this scenario should resolve in at most N turns"* — early resolution stops at the verdict anyway, so generosity is free; tightness causes false gate failures.
+7. **Write `tool_mocks`** that reuse the exact `datos` values and mirror the real API's shape (list endpoints lean, detail endpoints rich).
+8. **Write assertions**: structured types for what the assistant *does* (tools, tags, handoff, skills), `text` only for what it *says*.
+
+#### The termination gate — your scenario's implicit first assertion
+
+**Every case is graded on its `terminacion` FIRST.** The runner prepends a synthetic assertion result — `termination: <condition>` — to every execution:
+
+- If the simulation reached the expected outcome, the gate passes and the authored assertions are evaluated as usual.
+- If the simulation exhausted `max_turns` **without** the outcome occurring, the case **fails on the gate alone and the authored assertions are NOT evaluated** — they would be grading a conversation that never reached the state they assume. The gate's explanation tells you what happened (turns used vs max_turns) and what to fix.
+
+How the verdict happens: the simulator checks termination **when generating each user turn** (one merged LLM call: verdict on the previous assistant reply first, then the next message — never two calls). Turn 1 is the mandatory `primer_mensaje`, replayed verbatim. There is no post-loop check.
+
+**`max_turns` is a resolution budget, not a tuning knob.** Read it as: *"this scenario should resolve in at most N turns."* Set it generously — expected round-trips **plus 2–3 of margin** (the verdict on an assistant reply lands on the NEXT turn's generation, and real assistants sometimes need a clarifying turn you didn't predict). A too-tight budget produces false gate failures on conversations that were one turn away from the outcome; a generous one costs nothing when the scenario resolves early, because the simulator stops at the verdict, not at the ceiling. The gate — not a tight `max_turns` — is the mechanism that catches stuck scenarios.
+
+What this means when authoring:
+
+1. **A failing gate is a scenario bug, not an assistant bug** (usually). The simulated user never drove the conversation to the outcome: a missing reaction branch, a missing datum, a `primer_mensaje` that starts the wrong flow, or a `terminacion` that describes something unobservable. Fix the scenario before touching the playbook. **Tell-tale sign of a missing datum**: the simulated user re-greets or restates its opening mid-conversation — it was asked for something it doesn't hold (e.g. an order number) and, forbidden from inventing, it loops back to its request. Add the datum to `datos[]` (or, if the case is ABOUT not having it, cover the assistant's insistence in `reacciones`).
+2. **`terminacion` must be observable and reachable.** Write it as a fact that will have already occurred ("El asistente confirmó la cancelación"), achievable within `max_turns`. A terminacion like "el cliente queda satisfecho" can never be detected — the gate will fail forever.
+3. **Don't duplicate the gate.** You no longer need an authored assertion that restates the termination ("el asistente confirma la cancelación" as a text assertion AND as terminacion) — the gate already grades it.
 
 #### Hard rules
 
 - **NEVER invent business data — ask first.** The `datos` block and the `tool_mocks` need realistic, consistent values (order IDs, product names, amounts, dates). If you don't know what those look like in this business — what products exist, what an order ID format is, which states an order can be in — **stop and ask the user** before authoring the case. An invented datum produces a case that tests a flow the business doesn't have, and mocks that drift from the real API shape. Asking costs one message; a suite built on invented data costs every future debugging session.
 - **The scenario describes the USER, never the assistant.** "El asistente deberá pedir el ID" does not belong in a scenario — that's an assertion. A scenario that scripts the assistant confuses the simulator into playing both roles.
 - **One objective per scenario.** Two goals ("cancelar el pedido y de paso preguntar precios") produce conversations that satisfy assertions in unpredictable order. Split into two cases.
-- **Refusals must be explicit and covered against insistence.** A refusal case needs `entrega: "nunca"` AND a reaction for the assistant's follow-up attempts (e.g. `{"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"}`). The simulator holds refusals the scenario dictates — but only those.
+- **Refusals must be explicit and covered against insistence.** A refusal case does NOT list the datum (not listed = doesn't exist) AND covers the assistant's follow-up attempts in reacciones (e.g. `{"si": "pide el número", "entonces": "decir que no lo encuentra, aunque insista"}`, `{"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"}`). The simulator holds refusals the scenario dictates — but only those.
 - **Don't contradict the playbook**: a case expecting "indaga antes de derivar" while the scenario has the user demanding a human (which the playbook answers with an immediate handoff) will flip forever. Align the expectation with the playbook rule, or change the scenario trigger.
 - **Mocks must mirror the real API's shape**: if the list endpoint mock includes prices, the assistant never needs the detail tool — and your `tool_called` assertion fails for the wrong reason.
 - **Free text is legacy.** The `scenario` field still accepts plain prose for old cases; never author new cases that way.
 
 #### Worked examples (few-shot — all data fictional)
 
-❌ Vague (improvisation-prone):
+**Generic vs well-defined — the same test, side by side.** This is the difference between a case that flips and a case that holds:
 
-> "El usuario quiere cancelar un pedido."
+❌ **Generic** (every italic question is a degree of freedom the simulator will answer differently on every run):
 
-What flaps: does the user know the ID? Give it when? Confirm when asked? Accept a reschedule offer? Every run answers these differently. Ten simultaneous runs of a suite written in the structured style produced **zero verdict flips** — the residual variance was infrastructure, not simulation.
+```json
+{
+  "name": "cancelar-pedido",
+  "scenario": {
+    "objetivo": "cancelar un pedido"
+  },
+  "assertions": [{"type": "text", "criteria": "El asistente ayuda con la cancelación"}]
+}
+```
 
-✅ **Example 1 — refusal case** (user never provides the datum; note `entrega: "nunca"` + the `tool_not_called` guard):
+- *¿Qué pedido?* No hay datos → si el asistente pide el ID, el simulador no tiene nada para dar y la conversación se empantana → **el gate de terminación falla** (nunca llega al outcome).
+- *¿Qué hace si le piden confirmación?* Sin reacciones, a veces confirma, a veces duda → flip.
+- *¿Y si le ofrecen reprogramar en vez de cancelar?* Sin rama, a veces acepta → la cancelación nunca ocurre → gate falla.
+- *Sin `primer_mensaje`* → el caso ni siquiera es válido: el turno 1 es obligatorio y se reproduce literal.
+- *Sin `terminacion` propia* → hereda la genérica del campo `termination`, que si es vaga tampoco se detecta.
+- La assertion "ayuda con la cancelación" es subjetiva → `ambiguous`.
+
+✅ **Well-defined** (same intent, every branch covered):
+
+```json
+{
+  "name": "cancelar-pedido-confirma",
+  "scenario": {
+    "persona": "cliente existente, apurado pero educado. Tutea.",
+    "objetivo": "cancelar el pedido 88421",
+    "datos": [{"dato": "pedido=88421"}],
+    "reacciones": [
+      {"si": "pide el ID del pedido", "entonces": "darlo"},
+      {"si": "pide confirmación para cancelar", "entonces": "confirmar que sí, está seguro"},
+      {"si": "ofrece alternativas como reprogramar", "entonces": "rechazarlas, solo quiere cancelar"},
+      {"si": "deriva a una persona del equipo", "entonces": "aceptar y despedirse"}
+    ],
+    "primer_mensaje": "Hola, quiero cancelar un pedido",
+    "terminacion": "El asistente confirmó la cancelación del pedido"
+  },
+  "assertions": [
+    {"type": "tool_called", "name": "cancelar-pedido"},
+    {"type": "text", "criteria": "El asistente confirma al usuario que el pedido quedó cancelado"}
+  ],
+  "tool_mocks": {
+    "cancelar-pedido": {"match_kind": "any", "return_value": {"order_id": 88421, "cancelled": true}}
+  }
+}
+```
+
+Why it holds: the user has the datum the flow needs; every likely assistant move has a scripted response (including the reschedule offer that derails the generic version); the terminacion is an observable, reachable fact; the assertions check a deterministic action plus one concrete utterance. Ten simultaneous runs of a suite written in this style produced **zero verdict flips** — the residual variance was infrastructure, not simulation.
+
+✅ **Example 1 — refusal case** (the user does NOT have the datum, so it is not listed; insistence is covered in reacciones + a `tool_not_called` guard):
 
 ```json
 {
@@ -938,12 +1002,13 @@ What flaps: does the user know the ID? Give it when? Confirm when asked? Accept 
   "scenario": {
     "persona": "cliente impaciente, tutea",
     "objetivo": "cancelar un pedido del que no recuerda el número",
-    "datos": [{"dato": "número de pedido", "entrega": "nunca"}],
+    "datos": [],
     "reacciones": [
       {"si": "pide el número de pedido", "entonces": "decir que no lo encuentra, aunque insista"},
       {"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"},
       {"si": "deriva a una persona", "entonces": "aceptar y despedirse"}
     ],
+    "primer_mensaje": "Hola, necesito cancelar un pedido pero no encuentro el número",
     "terminacion": "El asistente pidió el número de pedido y quedó esperándolo o derivó"
   },
   "assertions": [
@@ -953,7 +1018,7 @@ What flaps: does the user know the ID? Give it when? Confirm when asked? Accept 
 }
 ```
 
-✅ **Example 2 — precondition-forced flow** (the assertion needs the user to withhold the ID first; note `si_lo_piden` + `first_message` pinned via `primer_mensaje`):
+✅ **Example 2 — precondition-forced flow** (the "asks before acting" assertion needs turn 1 without the ID: pin `primer_mensaje` without it; the user shares it when asked):
 
 ```json
 {
@@ -961,7 +1026,7 @@ What flaps: does the user know the ID? Give it when? Confirm when asked? Accept 
   "scenario": {
     "persona": "cliente ansioso por su compra, tutea",
     "objetivo": "saber dónde está el envío de su pedido",
-    "datos": [{"dato": "pedido=88421", "entrega": "si_lo_piden"}],
+    "datos": [{"dato": "pedido=88421"}],
     "reacciones": [
       {"si": "pide el ID del pedido", "entonces": "darlo"},
       {"si": "informa el estado del envío", "entonces": "agradecer"}
@@ -995,6 +1060,7 @@ What flaps: does the user know the ID? Give it when? Confirm when asked? Accept 
       {"si": "reconoce la consulta previa y registra el seguimiento", "entonces": "agradecer"},
       {"si": "trata el reclamo como nuevo", "entonces": "insistir en que es la segunda vez que escribe"}
     ],
+    "primer_mensaje": "Hola, ya escribí ayer por un problema con mi pedido 88421 y nadie me respondió. Necesito que lo resuelvan urgente.",
     "terminacion": "El asistente reconoció la consulta previa y registró el seguimiento"
   },
   "assertions": [
