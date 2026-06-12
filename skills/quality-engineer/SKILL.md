@@ -910,8 +910,9 @@ Optional fields and their defaults: `catch_all` ("responder breve y neutro, sin 
 3. **List the `datos`** the flow needs, with exact literal values — only what the user actually HAS. **If you don't know what realistic values look like in this business — ask the user. Never invent** (see Hard rules). To exercise "asks before acting" preconditions, pin a `primer_mensaje` without the datum; to author refusals, leave the datum out and cover insistence in `reacciones`.
 4. **Enumerate `reacciones`** from the playbook rules. The near-universal branch set: asks for a datum / asks for confirmation / offers an alternative / hands off to a human — plus whatever is specific to this flow. Everything else falls to `catch_all`.
 5. **Write `primer_mensaje`** (required): the exact opening message, replayed verbatim. It anchors the whole conversation and controls which data the user volunteers upfront.
-6. **Write `tool_mocks`** that reuse the exact `datos` values and mirror the real API's shape (list endpoints lean, detail endpoints rich).
-7. **Write assertions**: structured types for what the assistant *does* (tools, tags, handoff, skills), `text` only for what it *says*.
+6. **Set `max_turns` as a generous resolution budget**: estimate the round-trips the flow needs and add 2–3 of margin. It answers *"this scenario should resolve in at most N turns"* — early resolution stops at the verdict anyway, so generosity is free; tightness causes false gate failures.
+7. **Write `tool_mocks`** that reuse the exact `datos` values and mirror the real API's shape (list endpoints lean, detail endpoints rich).
+8. **Write assertions**: structured types for what the assistant *does* (tools, tags, handoff, skills), `text` only for what it *says*.
 
 #### The termination gate — your scenario's implicit first assertion
 
@@ -920,7 +921,9 @@ Optional fields and their defaults: `catch_all` ("responder breve y neutro, sin 
 - If the simulation reached the expected outcome, the gate passes and the authored assertions are evaluated as usual.
 - If the simulation exhausted `max_turns` **without** the outcome occurring, the case **fails on the gate alone and the authored assertions are NOT evaluated** — they would be grading a conversation that never reached the state they assume. The gate's explanation tells you what happened (turns used vs max_turns) and what to fix.
 
-How the verdict happens: the simulator checks termination **when generating each user turn** (one merged LLM call: verdict on the previous assistant reply first, then the next message — never two calls). Turn 1 is the mandatory `primer_mensaje`, replayed verbatim. There is no post-loop check, so **give the outcome one spare turn**: if the flow needs ~4 round-trips, set `max_turns: 5` so the verdict on the final assistant reply has a turn to land.
+How the verdict happens: the simulator checks termination **when generating each user turn** (one merged LLM call: verdict on the previous assistant reply first, then the next message — never two calls). Turn 1 is the mandatory `primer_mensaje`, replayed verbatim. There is no post-loop check.
+
+**`max_turns` is a resolution budget, not a tuning knob.** Read it as: *"this scenario should resolve in at most N turns."* Set it generously — expected round-trips **plus 2–3 of margin** (the verdict on an assistant reply lands on the NEXT turn's generation, and real assistants sometimes need a clarifying turn you didn't predict). A too-tight budget produces false gate failures on conversations that were one turn away from the outcome; a generous one costs nothing when the scenario resolves early, because the simulator stops at the verdict, not at the ceiling. The gate — not a tight `max_turns` — is the mechanism that catches stuck scenarios.
 
 What this means when authoring:
 
