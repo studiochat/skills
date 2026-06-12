@@ -40,7 +40,7 @@ Create a single eval test case for a playbook.
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique name (lowercase with dashes) |
 | `scenario` | string \| object | Yes* | **Polymorphic**: free text (legacy) or the structured scenario JSON directly (same shape as `scenario_blocks`). Prefer the structured form for all new cases. |
-| `scenario_blocks` | object | No | Structured scenario v2: `{persona?, objetivo, datos[], reacciones[], catch_all?, cierre?, primer_mensaje?, terminacion?}`. When present it is the source of truth — the server renders the canonical text into `scenario` (responses always carry BOTH: `scenario` as rendered text for legacy readers + `scenario_blocks` as the structure). `datos[]` items: `{dato, entrega: "de_entrada"|"si_lo_piden"|"nunca"}`. `reacciones[]` items: `{si, entonces}`. `primer_mensaje`/`terminacion` project onto the case's `first_message`/`termination`. |
+| `scenario_blocks` | object | No | Structured scenario v2: `{persona?, objetivo, datos[], reacciones[], catch_all?, cierre?, primer_mensaje?, terminacion?}`. When present it is the source of truth — the server renders the canonical text into `scenario` (responses always carry BOTH: `scenario` as rendered text for legacy readers + `scenario_blocks` as the structure). `datos[]` items: `{dato}` — values the user HAS (deprecated optional `entrega` policy still parses on old cases). `reacciones[]` items: `{si, entonces}`. `primer_mensaje`/`terminacion` project onto the case's `first_message`/`termination`. |
 | `termination` | string | Yes* | Expected outcome condition. *Either here or as `scenario_blocks.terminacion`. |
 | `first_message` | string | No | Exact first message (LLM generates if omitted). May also come from `scenario_blocks.primer_mensaje`. |
 | `max_turns` | int | No | Max turns (1-50, default: 10) |
@@ -50,6 +50,8 @@ Create a single eval test case for a playbook.
 | `user_context` | object | No | Per-case user context; merges over the run-level `user_context` (case wins). Use for case-specific user attributes or `eval_overrides`. |
 
 **Response:** `EvalCase` object with `id`, `created_at`, `is_enabled`, etc.
+
+> **Termination gate**: every execution's `assertion_results` begins with a synthetic `termination: <condition>` entry. If the simulation never reached the expected outcome, that entry is `failed`, the case fails, and the authored assertions are absent (not evaluated).
 
 > **PATCH semantics for scenarios**: sending `scenario_blocks` (or `scenario` as JSON) re-renders the text and keeps the case structured (v2). Sending `scenario` as plain TEXT on a case that had blocks **clears the stale blocks** — the text becomes the source of truth.
 
