@@ -38,6 +38,48 @@ Write it for the human admin (shown verbatim in the UI):
 Then tell the user the change is queued for approval. Only PENDING approvals accept a
 description (409 once reviewed); you can re-PATCH to refine it while it is pending.
 
+### Show the actual edit with a diff block
+
+When the change is an **edit to existing text** — a skill's `content`, a playbook's
+instructions, a KB item, an example block, a tool description — prose alone makes the
+reviewer guess what moved. Embed a **diff block** in the description and the approvals
+panel renders it as a side-by-side before/after (red = removed, green = added), the same
+widget used for playbook version diffs. Put a short prose explanation first (the WHAT/WHY
+above), then the diff block(s):
+
+```
+[[diff]]
+[[before]]
+4. Si los 3 fallan → escalar a humano.
+[[after]]
+Si las 3 variantes fallan, NO escales todavía: pedile al cliente la razón social
+exacta y reintentá. Si vuelve a fallar, o si no la sabe → escalá a humano.
+[[/diff]]
+```
+
+Rules for the diff block (the parser is strict — follow these exactly or the block
+won't render):
+
+- Each of the four markers — `[[diff]]`, `[[before]]`, `[[after]]`, `[[/diff]]` — must be
+  on its **own line**, lowercase, no spaces inside the brackets. Always close with
+  `[[/diff]]`.
+- `[[before]]` and `[[after]]` are **required**. The text between `[[before]]` and
+  `[[after]]` is the old version; the text between `[[after]]` and `[[/diff]]` is the new
+  version. Paste both **verbatim** — do NOT re-summarize inside the block; the prose above
+  already does that.
+- Include only the **section that actually changed** plus a line or two of surrounding
+  context, not the whole skill. Big walls of unchanged text bury the change.
+- For a brand-new addition leave `[[before]]` empty; for a deletion leave `[[after]]`
+  empty. (Identical before/after just renders "no difference".)
+- You may include **several** `[[diff]]…[[/diff]]` blocks in one description (e.g. two
+  separate edits in the same skill). Text outside the blocks renders normally.
+- This is plain text inside the same `description` field — no extra API call. If the panel
+  ever doesn't render it, it still reads as legible before/after text.
+
+Use a diff block for text edits; skip it for pure structural changes (linking a KB,
+toggling a setting, creating an empty object) where a before → after count in prose is
+clearer.
+
 ## Key Terminology
 
 **Assistants and playbooks are the same concept.** In the API, the term "playbook" is used

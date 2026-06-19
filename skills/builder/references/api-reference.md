@@ -929,6 +929,23 @@ Returns the full approval. Only PENDING approvals accept a description (409 once
 reviewed). Always call this right after receiving a 202 — the panel shows your text as
 the primary explanation of the request.
 
+The `description` is free text (stored verbatim, max 20000 chars). For edits to existing
+text, embed one or more **diff blocks** and the panel renders them as side-by-side
+before/after; everything outside the blocks renders as normal text:
+
+```
+[[diff]]
+[[before]]
+current text, verbatim
+[[after]]
+new text, verbatim
+[[/diff]]
+```
+
+Each marker must be on its own line. `[[before]]`/`[[after]]` are required (leave
+`[[before]]` empty for an addition, `[[after]]` empty for a deletion). See the
+"Show the actual edit with a diff block" section of SKILL.md for guidance.
+
 ### List / get approvals
 `GET /approvals?status=pending` · `GET /approvals/{approval_id}`
 
