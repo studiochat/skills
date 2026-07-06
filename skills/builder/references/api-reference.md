@@ -898,6 +898,67 @@ Creates a new playbook version with updated order. Body is an ordered array of s
 ["password-reset", "refund-process", "billing-inquiry"]
 ```
 
+### Conditional enablement (`enable_condition`)
+
+Optional on create/update. Gates an `is_active` skill on the live conversation
+context (same dict the `{{ context: path }}` pill reads), re-evaluated every
+turn. Non-matching skills are excluded from the agent entirely (not listed, not
+loadable; a `{{ skill: name }}` reference gets a static "disabled by condition"
+bounce from `load_skill`). `null` / omitted = unconditional.
+
+```json
+{
+  "name": "oferta-vip-arg",
+  "description": "Aplicar la promo 50% OFF cuando el cliente pregunta precios",
+  "trigger": "El cliente pregunta precios o totales",
+  "content": "## Promo activa...",
+  "is_active": true,
+  "enable_condition": {
+    "op": "and",
+    "clauses": [
+      {"path": "contact.country", "operator": "eq", "value": "ARG"},
+      {"path": "contact.vip", "operator": "eq", "value": true}
+    ]
+  }
+}
+```
+
+- Groups (`and`/`or`, optional `negate`) nest one level; max 16 clauses.
+- Operators: `eq`, `neq`, `in`, `not_in` (array values), `contains`, `exists`,
+  `not_exists` (no value), `gt`, `gte`, `lt`, `lte` (numeric).
+- Lax equality for stringly-typed payloads: `true` matches `"true"`, `5`
+  matches `"5"`; strings are case-sensitive; booleans never equal numbers.
+- **Fail-closed**: a missing key / empty string / empty context makes every
+  clause false except `not_exists` (including `neq`). Empty context = all
+  conditional skills off until the attribute arrives on a later turn.
+- On PATCH: omitted = keep the stored condition, explicit `null` = clear it.
+  Full-playbook `skills` snapshots also preserve stored conditions for items
+  that omit the field.
+- Validation errors return 422 (bad operator/path, wrong value arity, depth > 2,
+  more than 16 clauses).
+
+### Dry-run a condition
+
+`POST /projects/{project_id}/playbooks/{base_id}/skills/condition-check`
+
+Read-only (no version created; sandbox keys don't queue an approval). Validates
+the condition and optionally evaluates it — against a sample `context`, or
+against a real conversation's latest context snapshot via `conversation_id`
+(takes precedence; 404 if the conversation doesn't exist).
+
+```json
+{"condition": {"op": "and", "clauses": [{"path": "campaign", "operator": "eq", "value": "active"}]}, "conversation_id": "abc123"}
+```
+
+Response:
+
+```json
+{"valid": true, "rendered": "campaign == \"active\"", "result": true, "context_found": true, "context": {"campaign": "active"}}
+```
+
+`valid: false` + `error` for malformed conditions; `context_found: false` when
+the conversation predates context snapshots (the condition would fail closed).
+
 ---
 
 ### Supported KB types

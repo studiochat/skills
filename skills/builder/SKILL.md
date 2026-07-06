@@ -404,6 +404,104 @@ python3 scripts/api.py \
   -X PUT --body '["password-reset", "refund-process", "billing-inquiry"]'
 ```
 
+### Conditional skills (`enable_condition`)
+
+A skill with `is_active: true` can additionally be gated on the **live conversation
+context** — the same per-turn context dict the `{{ context: path }}` pill reads.
+Skills whose condition doesn't match are removed from the agent for that turn:
+not listed in the system prompt, not loadable, and their skill-scoped tools/KBs
+are not registered. `enable_condition: null` (or omitted) = always enabled.
+
+Use it for segment-specific casuísticas: promos for one country, VIP-only flows,
+per-campaign behavior — instead of duplicating assistants or asking the model to
+self-filter.
+
+```bash
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills" \
+  -X POST --body '{
+    "name": "oferta-vip-arg",
+    "description": "Aplicar la promo 50% OFF cuando el cliente pregunta precios",
+    "trigger": "El cliente pregunta precios o totales",
+    "content": "## Promo activa\n1. Calcular el total\n2. Aplicar 50% de descuento",
+    "is_active": true,
+    "enable_condition": {
+      "op": "and",
+      "clauses": [
+        {"path": "contact.country", "operator": "eq", "value": "ARG"},
+        {"path": "contact.vip", "operator": "eq", "value": true}
+      ]
+    }
+  }'
+```
+
+**Condition format** — a small boolean AST:
+
+- Group: `{"op": "and" | "or", "clauses": [...], "negate": false}`. Groups nest
+  one level (OR-of-ANDs / AND-of-ORs), max 16 clauses total.
+- Clause: `{"path": "dotted.path", "operator": "...", "value": ..., "negate": false}`.
+  `path` uses the context-pill grammar (dot-separated keys into the context dict).
+
+| Operator | Value | Matches when |
+|---|---|---|
+| `eq` / `neq` | scalar | equal / not equal (lax: `true` matches `"true"`, `5` matches `"5"`) |
+| `in` / `not_in` | non-empty array | actual equals any / no element (lax per element) |
+| `contains` | scalar | substring of a string value, or member of a list value |
+| `exists` / `not_exists` | — (omit `value`) | key present and non-empty / missing or empty |
+| `gt` `gte` `lt` `lte` | number | numeric comparison (numeric-looking strings coerce) |
+
+**Semantics you must design around (fail-closed):**
+
+- A **missing key**, empty string, or empty/absent context makes every clause
+  false **except `not_exists`** — including `neq`. "Missing or different" is
+  spelled `not_exists OR neq` explicitly.
+- Conditions re-evaluate **every turn**: a skill hidden on turn 1 (context not
+  yet populated) appears the moment the attribute arrives.
+- Equality is case-sensitive for strings (`"ARG"` ≠ `"arg"`); whitespace is
+  stripped; booleans never equal numbers (`true` ≠ `1`).
+- If the skill is referenced via `{{ skill: name }}` from instructions while its
+  condition doesn't match, `load_skill` returns a static bounce telling the model
+  the skill is disabled for this conversation and to proceed without it — safe,
+  but don't rely on it as a control-flow mechanism.
+
+**Updating / clearing:** on `PATCH .../skills/{name}`, omitting `enable_condition`
+keeps the stored condition; an explicit `"enable_condition": null` clears it
+(back to unconditional). The full-playbook `skills` snapshot behaves the same
+way — items that omit the field preserve the stored condition by skill name, so
+config-as-code that predates this field never wipes conditions. To **set** a
+condition from config-as-code you must include the field explicitly.
+
+### Dry-run a condition (`condition-check`)
+
+Validate a condition and test what it would do — against a hand-built context or
+against a **real conversation's** latest context snapshot. Read-only: no version
+is created and sandbox (`sbs_`) keys don't queue an approval.
+
+```bash
+# Validate + evaluate against a sample context
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/condition-check" \
+  -X POST --body '{
+    "condition": {"op": "and", "clauses": [{"path": "contact.country", "operator": "eq", "value": "ARG"}]},
+    "context": {"contact": {"country": "ARG"}}
+  }'
+
+# Would this skill have fired in a real conversation? (uses its latest context snapshot)
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/condition-check" \
+  -X POST --body '{
+    "condition": {"op": "and", "clauses": [{"path": "campaign", "operator": "eq", "value": "active"}]},
+    "conversation_id": "CONVERSATION_ID"
+  }'
+```
+
+Response: `{"valid": true, "rendered": "campaign == \"active\"", "result": true, "context_found": true, "context": {...}}`.
+`valid: false` + `error` on a malformed condition; `context_found: false` when the
+conversation has no context snapshot (the condition would fail closed). **Always
+dry-run against a real conversation of the target segment before shipping a
+condition** — context shapes differ per integration (webhook vs public chat API),
+and a path that works for one client may never match for another.
+
 ### Template macros (the "pills")
 
 Skill content and playbook instructions support the **same five** inline macros. They are the only macros the compiler recognizes:
