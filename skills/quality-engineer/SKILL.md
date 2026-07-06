@@ -192,7 +192,7 @@ Scale coverage to the severity / scope of the fix: a narrow fix gets one regress
      "termination": "The assistant escalates to a human agent",
      "max_turns": 5,
      "assertions": [
-       {"type": "text", "category": "prohibido", "criteria": "inventar el estado del pedido"},
+       {"type": "text", "category": "prohibited", "criteria": "inventar el estado del pedido"},
        {"type": "handoff"}
      ],
      "tool_mocks": {
@@ -289,7 +289,7 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Quiero un reembolso de OR
 # Dry-run a candidate eval case WITHOUT persisting it (validate the case
 # definition before committing it via `cases create`)
 python3 scripts/qa.py dry-run start PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
-    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"type":"text","category":"requerido","criteria":"..."}]}'
+    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"type":"text","category":"required","criteria":"..."}]}'
 python3 scripts/qa.py dry-run status DRY_RUN_ID
 python3 scripts/qa.py dry-run cancel DRY_RUN_ID
 ```
@@ -1065,7 +1065,7 @@ Why it holds: the user has the datum the flow needs; every likely assistant move
   },
   "assertions": [
     {"type": "skill_loaded", "skill": "check-duplicates"},
-    {"type": "text", "category": "requerido", "criteria": "reconocer que existe una consulta previa sobre el mismo tema"}
+    {"type": "text", "category": "required", "criteria": "reconocer que existe una consulta previa sobre el mismo tema"}
   ]
 }
 ```
@@ -1088,17 +1088,17 @@ The `--judge-model` flag affects only text assertions. Structured assertions ign
 Every new text assertion sets a **`category`** — the polarity of the check — which routes it to a specialized, low-flakiness judge. Two options, which the UI shows as "El asistente debe / no debe":
 
 ```json
-{"type": "text", "category": "requerido", "criteria": "mencionar la política de reembolso de 30 días"}
-{"type": "text", "category": "prohibido", "criteria": "usar emojis"}
+{"type": "text", "category": "required", "criteria": "mencionar la política de reembolso de 30 días"}
+{"type": "text", "category": "prohibited", "criteria": "usar emojis"}
 ```
 
-Write `criteria` as an **infinitive predicate with no "the assistant…" prefix** — the category supplies "El asistente debe / no debe". `requerido` covers both stating information and asking for data (`"pedir el número de operación"`); `prohibido` covers forbidden content.
+Write `criteria` as an **infinitive predicate with no "the assistant…" prefix** — the category supplies "El asistente debe / no debe". `required` covers both stating information and asking for data (`"pedir el número de operación"`); `prohibited` covers forbidden content.
 
 Why the category matters — its judge already knows the things that used to make free-text criteria flaky, so you don't have to defend against them:
 
-- **Negation ≠ assertion** (`prohibido`): "por ese lado no hay problema" does not violate "no debe decir que hay un problema".
+- **Negation ≠ assertion** (`prohibited`): "por ese lado no hay problema" does not violate "no debe decir que hay un problema".
 - **Say ≠ do**: internal tool/skill/attribute actions (the `[actions: …]` line) never count as things the assistant *said* to the user.
-- **Equivalent questions** (`requerido`, ask-style): "¿fue hoy o hace cuánto?" satisfies "pedir la fecha"; mentioning the data or saying where to find it does NOT.
+- **Equivalent questions** (`required`, ask-style): "¿fue hoy o hace cuánto?" satisfies "pedir la fecha"; mentioning the data or saying where to find it does NOT.
 - **Evidence contract**: a `failed` prohibition or a `passed` requirement must quote the exact offending/satisfying phrase, or the verdict degrades to `ambiguous`.
 
 Legacy free text (no `category`) still runs, on the generic judge — kept only for backwards compatibility. Do **not** author new criteria this way:
