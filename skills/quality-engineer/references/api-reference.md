@@ -119,18 +119,20 @@ New text assertions carry a `category` (`"required"` / `"prohibited"`) that rout
 
 **Always author text assertions with a `category`** — it routes the criterion to a specialized judge that is far less flaky than the generic one (it knows that negating/refusing X is not asserting X, that internal tool/skill actions are not things the assistant *said*, and that an equivalent question satisfies "asks for X"). The category also enforces an evidence contract: a failed prohibition / passed requirement must quote the exact offending / satisfying phrase.
 
-When `category` is set, write `criteria` as an **infinitive predicate** — no "the assistant…" prefix — so it reads as "El asistente debe / no debe {criteria}":
+When `category` is set, write `criteria` as an **infinitive predicate** — no "the assistant…" prefix — so it reads as "El asistente debe / no debe {criteria}". The full authoring guide (when to use which, good/bad examples, framing, content requirements) is in [SKILL.md → `text` — LLM-as-judge](../SKILL.md); the essentials:
 
-- **`required`** (the assistant MUST do X). Covers stating info AND asking for data.
+- **`required`** (the assistant MUST do X). Covers stating info AND asking for data. Passes when X happens in ≥1 turn; the judge must quote the satisfying phrase.
   ```json
-  {"type": "text", "category": "required", "criteria": "mencionar el plazo máximo de acreditación para retiros en pesos"}
-  {"type": "text", "category": "required", "criteria": "pedir el número de operación"}
+  {"type": "text", "category": "required", "criteria": "informar que el reembolso demora 48 horas hábiles"}
+  {"type": "text", "category": "required", "criteria": "pedir el número de pedido"}
   ```
-- **`prohibited`** (the assistant must NOT do X).
+- **`prohibited`** (the assistant must NOT do X). Passes when X never happens; on failure the judge must quote the offending phrase.
   ```json
   {"type": "text", "category": "prohibited", "criteria": "usar emojis"}
-  {"type": "text", "category": "prohibited", "criteria": "revelar el proveedor técnico de Pix"}
+  {"type": "text", "category": "prohibited", "criteria": "prometer la reversión inmediata del dinero"}
   ```
+
+Prefer the framing a single verbatim quote can prove, and don't use `prohibited` for something a structured assertion checks deterministically (`no_handoff`, `tag_added`, `tool_not_called`). Bad criteria (`"ser cordial"`, degree words like `"muy empático"`, two checks in one) come back `ambiguous` with a rewrite suggestion.
 
 Legacy free text (no `category`) still runs on the generic judge — kept only for backwards compatibility. Do **not** author new criteria this way:
 
