@@ -192,7 +192,7 @@ Scale coverage to the severity / scope of the fix: a narrow fix gets one regress
      "termination": "The assistant escalates to a human agent",
      "max_turns": 5,
      "assertions": [
-       {"criteria": "The assistant does not fabricate an order status"},
+       {"type": "text", "category": "prohibited", "criteria": "inventar el estado del pedido"},
        {"type": "handoff"}
      ],
      "tool_mocks": {
@@ -289,7 +289,7 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Quiero un reembolso de OR
 # Dry-run a candidate eval case WITHOUT persisting it (validate the case
 # definition before committing it via `cases create`)
 python3 scripts/qa.py dry-run start PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
-    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"criteria":"..."}]}'
+    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"type":"text","category":"required","criteria":"..."}]}'
 python3 scripts/qa.py dry-run status DRY_RUN_ID
 python3 scripts/qa.py dry-run cancel DRY_RUN_ID
 ```
@@ -1065,7 +1065,7 @@ Why it holds: the user has the datum the flow needs; every likely assistant move
   },
   "assertions": [
     {"type": "skill_loaded", "skill": "check-duplicates"},
-    {"type": "text", "criteria": "El asistente reconoce que existe una consulta previa sobre el mismo tema"}
+    {"type": "text", "category": "required", "criteria": "reconocer que existe una consulta previa sobre el mismo tema"}
   ]
 }
 ```
@@ -1083,32 +1083,100 @@ The `--judge-model` flag affects only text assertions. Structured assertions ign
 
 > **Picking the right type**: every time you reach for `text` to check something the assistant *did* (called a tool, handed off, set a priority, applied a tag, wrote a private note), there's a structured variant that does it deterministically. Use `text` only for what the assistant *said* (tone, content of the message, that it mentioned a specific policy).
 
-#### `text` — LLM-as-judge
+#### `text` — LLM-as-judge (author with a `category`)
+
+Every new text assertion sets a **`category`**: the polarity of the check. It routes the criterion to a specialized judge and, crucially, **inverts the burden of proof** — which is what makes these far less flaky than generic free text. Two options, shown in the UI as "El asistente debe / no debe":
+
+| Category | Means | Passes when… | Evidence the judge must produce |
+|---|---|---|---|
+| `required` | the assistant **must** do X | X happens in ≥1 turn | the verbatim phrase that satisfies X (+ its turn) |
+| `prohibited` | the assistant **must not** do X | X never happens | on failure, the verbatim phrase that violates X |
+
+Write `criteria` as an **infinitive predicate, with no "the assistant…" prefix** — the category supplies "El asistente debe / no debe {criteria}".
 
 ```json
-{"type": "text", "criteria": "The assistant mentions the 30-day refund policy"}
+{"type": "text", "category": "required",   "criteria": "informar el plazo de entrega estimado"}
+{"type": "text", "category": "prohibited", "criteria": "usar emojis"}
 ```
 
-`type` defaults to `text`, so the legacy short form still works:
+**Ternary verdict.** `AssertionResult.verdict` is `passed`, `failed`, or **`ambiguous`** (the legacy `passed` boolean maps `ambiguous` → `true`). A criterion too vague to score objectively comes back `ambiguous` with a `rewrite_suggestion` instead of a guessed pass/fail — see [The `ambiguous` verdict](#the-ambiguous-verdict--criteria-lint).
+
+##### When to use `required`
+
+Assert that a specific thing **is said, asked, or done in words**: a fact the answer must contain, a question the assistant must ask, an action it must state it is taking. `required` covers both *informing* and *asking for data*.
+
+✅ Good — each names one observable thing:
+```json
+{"type": "text", "category": "required", "criteria": "informar que el reembolso demora 48 horas hábiles"}
+{"type": "text", "category": "required", "criteria": "pedir el número de pedido"}
+{"type": "text", "category": "required", "criteria": "ofrecer una disculpa por la demora"}
+{"type": "text", "category": "required", "criteria": "confirmar el monto del reembolso en la respuesta"}
+```
+
+❌ Bad:
+```json
+{"type": "text", "category": "required", "criteria": "ser claro y útil"}              // undefined quality → ambiguous
+{"type": "text", "category": "required", "criteria": "responder muy rápido y bien"}    // degree word + two checks
+{"type": "text", "category": "required", "criteria": "pedir el número de pedido y la fecha"} // two asks → split in two
+```
+
+> **Asking ≠ mentioning.** An ask-style `required` ("pedir X") passes only when the assistant actually **requests the user provide X** — a question or an imperative. Merely mentioning the datum, or telling the user where to find it, does NOT satisfy it. Equivalent questions count: "¿fue hoy o hace cuánto?" satisfies "pedir la fecha".
+
+##### When to use `prohibited`
+
+Assert a forbidden behavior or content **never appears**: a leaked internal detail, a promise the assistant may not make, a style rule, a wrong value.
+
+✅ Good:
+```json
+{"type": "text", "category": "prohibited", "criteria": "usar emojis"}
+{"type": "text", "category": "prohibited", "criteria": "prometer la reversión inmediata del dinero"}
+{"type": "text", "category": "prohibited", "criteria": "adelantar un veredicto sobre la garantía"}
+{"type": "text", "category": "prohibited", "criteria": "inventar un estado de pedido que la tool no devolvió"}
+```
+
+❌ Bad:
+```json
+{"type": "text", "category": "prohibited", "criteria": "ser descortés"}      // undefined quality → ambiguous
+{"type": "text", "category": "prohibited", "criteria": "no derivar el caso"} // double negative — see the framing note below
+```
+
+> **Negation ≠ assertion.** The judge knows that *referring* to the forbidden thing to negate/refuse/reassure is not *doing* it: "por ese lado no hay problema" does not violate "no debe decir que hay un problema"; "no puedo recomendarte medicamentos" does not violate "no debe recomendar medicamentos". And internal `[actions: …]` (tool/skill/attribute events) never count as things the assistant *said* — a KB search that surfaced a word does not mean the assistant told it to the user.
+
+##### `required` vs `prohibited` — picking the framing
+
+The same intent can often be written either way. Rules of thumb:
+
+- If there is a **specific thing the answer must contain**, use `required` — its evidence is the satisfying quote.
+- If the risk is that the assistant **says a specific wrong/forbidden thing**, use `prohibited` — its evidence is the offending quote.
+- Prefer the framing a **single verbatim quote** can prove. "stay within the stated replacement window" is better as `required` "informar que la reposición demora 5 días hábiles" (one quote proves it) than as `prohibited` "adelantar cualquier otro plazo" (you would have to disprove every alternative).
+- **Don't** use `prohibited` for something a structured assertion checks deterministically: "no debe derivar" → `no_handoff`; "debe etiquetar como X" → `tag_added`; "no debe llamar refund con estos args" → `tool_not_called`. Deterministic beats judged.
+
+##### Asserting content — "the assistant must say X"
+
+Three shapes, most to least specific:
+
+- **A specific fact** — the value must appear: `"informar que el envío demora 24 a 48 horas"`. Pin an exact figure only when it is the point; the judge accepts paraphrase, but not a *different* number.
+- **A phrase category** — any member of a class satisfies it: `"incluir al menos una frase de empatía (p. ej. 'lamento lo que pasó')"`. Put an example in parentheses so the class is anchored, not subjective.
+- **A value from context/tool** — pin the value deterministically with a mock or a `tool_called` args-match, then let the `required` text criterion check it reached the user. E.g. mock `obtener-pedido` → `{"estado": "en preparación"}`, then `{"type":"text","category":"required","criteria":"informar que el pedido está en preparación"}`.
+
+Never assert a value the assistant cannot know (no tool or KB provides it) — that tests the fixture, not the assistant.
+
+##### Rules that keep any criterion out of `ambiguous`
+
+The category judge already enforces negation-vs-assertion, say-vs-do, and paraphrase. These still guide how you phrase the predicate:
+
+1. **Binary and observable** — a behavior, a phrase category, or a countable action two readers would score identically. Undefined qualities ("cordial", "natural") and degree words with no threshold ("muy", "bastante", "suficientemente") come back `ambiguous` with a rewrite.
+2. **One check per criterion** — split "hace X **y** explica Y" into two assertions so each shows its own verdict in the diff view.
+3. **Conditionals need the scenario to force the condition** — "cuando Y, entonces X" passes *vacuously* if the simulated user never does Y. If you write one, make the scenario's `reacciones` produce Y.
+4. **Semantic match, not literal** — don't demand exact wording unless the wording itself is the requirement.
+
+##### Legacy free text — do not author
+
+A bare `{"criteria": "…"}` with no `category` still runs, on the generic judge, kept only for backwards compatibility:
 
 ```json
-{"criteria": "The assistant asks for the order number before proceeding"}
+{"criteria": "The assistant mentions the 30-day refund policy"}   // legacy — avoid in new cases
 ```
-
-**The judge returns a TERNARY verdict** — `AssertionResult.verdict` is `passed`, `failed`, or **`ambiguous`** (the legacy `passed` boolean maps `ambiguous` → `true`). See [The `ambiguous` verdict](#the-ambiguous-verdict--criteria-lint) below: a criterion too vague to verify objectively doesn't get a guessed binary verdict — it gets flagged for rewrite.
-
-**Rules for writing criteria that never come back ambiguous** (each rule maps to a real flakiness pattern found in production suites):
-
-1. **Binary and observable.** The criterion must describe something two independent judges would always score identically: a concrete behavior, a phrase category, a countable action.
-   - ✅ "El asistente menciona la política de reembolso de 30 días"
-   - ✅ "El asistente incluye al menos una frase de empatía (p. ej. 'lamento lo que pasó')"
-   - ❌ "El asistente responde cordial" → `ambiguous` (cualidad indefinida)
-   - ❌ "El asistente usa un tono muy empático" → `ambiguous` (palabra de grado sin umbral: "muy", "bastante", "suficientemente")
-2. **One check per criterion.** Split compound criteria — "hace X **y** explica Y" becomes two assertions; each shows its own verdict in the diff view. Alternatives with "o" are supported (passes if ANY branch holds) but make failures harder to read.
-3. **Negations are reliable.** "El asistente NO hace X" passes when X is absent — the judge is explicitly instructed that absence alone satisfies a negated criterion. Don't avoid them.
-4. **Conditional criteria need the scenario to force the condition.** "Si el usuario insulta, el asistente deriva" passes *vacuously* when the simulated user never insults — the criterion tested nothing. If you write "cuando Y, entonces X", the `scenario` must make Y actually happen.
-5. **Semantic match, not literal.** The assistant doesn't need the criterion's exact words — an equivalent paraphrase in any language satisfies it. Don't write criteria that demand specific phrasings unless the phrasing itself is the requirement.
-6. **The judge sees the assistant's actions.** Each assistant turn carries an `[actions: handoff_agent, label=..., note]` line in the judge's view, so criteria like "deriva la conversación" are judged against the real event — but prefer the structured assertion (`handoff`, `tag_added`, …) whenever one exists: deterministic beats judged.
 
 #### `tool_called` — a specific tool was invoked
 
