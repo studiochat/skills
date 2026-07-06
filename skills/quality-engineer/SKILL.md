@@ -192,7 +192,7 @@ Scale coverage to the severity / scope of the fix: a narrow fix gets one regress
      "termination": "The assistant escalates to a human agent",
      "max_turns": 5,
      "assertions": [
-       {"criteria": "The assistant does not fabricate an order status"},
+       {"type": "text", "category": "prohibido", "criteria": "inventar el estado del pedido"},
        {"type": "handoff"}
      ],
      "tool_mocks": {
@@ -289,7 +289,7 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Quiero un reembolso de OR
 # Dry-run a candidate eval case WITHOUT persisting it (validate the case
 # definition before committing it via `cases create`)
 python3 scripts/qa.py dry-run start PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
-    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"criteria":"..."}]}'
+    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"type":"text","category":"requerido","criteria":"..."}]}'
 python3 scripts/qa.py dry-run status DRY_RUN_ID
 python3 scripts/qa.py dry-run cancel DRY_RUN_ID
 ```
@@ -1065,7 +1065,7 @@ Why it holds: the user has the datum the flow needs; every likely assistant move
   },
   "assertions": [
     {"type": "skill_loaded", "skill": "check-duplicates"},
-    {"type": "text", "criteria": "El asistente reconoce que existe una consulta previa sobre el mismo tema"}
+    {"type": "text", "category": "requerido", "criteria": "reconocer que existe una consulta previa sobre el mismo tema"}
   ]
 }
 ```
@@ -1083,21 +1083,33 @@ The `--judge-model` flag affects only text assertions. Structured assertions ign
 
 > **Picking the right type**: every time you reach for `text` to check something the assistant *did* (called a tool, handed off, set a priority, applied a tag, wrote a private note), there's a structured variant that does it deterministically. Use `text` only for what the assistant *said* (tone, content of the message, that it mentioned a specific policy).
 
-#### `text` — LLM-as-judge
+#### `text` — LLM-as-judge (author with a `category`)
+
+Every new text assertion sets a **`category`** — the polarity of the check — which routes it to a specialized, low-flakiness judge. Two options, which the UI shows as "El asistente debe / no debe":
 
 ```json
-{"type": "text", "criteria": "The assistant mentions the 30-day refund policy"}
+{"type": "text", "category": "requerido", "criteria": "mencionar la política de reembolso de 30 días"}
+{"type": "text", "category": "prohibido", "criteria": "usar emojis"}
 ```
 
-`type` defaults to `text`, so the legacy short form still works:
+Write `criteria` as an **infinitive predicate with no "the assistant…" prefix** — the category supplies "El asistente debe / no debe". `requerido` covers both stating information and asking for data (`"pedir el número de operación"`); `prohibido` covers forbidden content.
+
+Why the category matters — its judge already knows the things that used to make free-text criteria flaky, so you don't have to defend against them:
+
+- **Negation ≠ assertion** (`prohibido`): "por ese lado no hay problema" does not violate "no debe decir que hay un problema".
+- **Say ≠ do**: internal tool/skill/attribute actions (the `[actions: …]` line) never count as things the assistant *said* to the user.
+- **Equivalent questions** (`requerido`, ask-style): "¿fue hoy o hace cuánto?" satisfies "pedir la fecha"; mentioning the data or saying where to find it does NOT.
+- **Evidence contract**: a `failed` prohibition or a `passed` requirement must quote the exact offending/satisfying phrase, or the verdict degrades to `ambiguous`.
+
+Legacy free text (no `category`) still runs, on the generic judge — kept only for backwards compatibility. Do **not** author new criteria this way:
 
 ```json
-{"criteria": "The assistant asks for the order number before proceeding"}
+{"criteria": "The assistant mentions the 30-day refund policy"}   // legacy — avoid
 ```
 
 **The judge returns a TERNARY verdict** — `AssertionResult.verdict` is `passed`, `failed`, or **`ambiguous`** (the legacy `passed` boolean maps `ambiguous` → `true`). See [The `ambiguous` verdict](#the-ambiguous-verdict--criteria-lint) below: a criterion too vague to verify objectively doesn't get a guessed binary verdict — it gets flagged for rewrite.
 
-**Rules for writing criteria that never come back ambiguous** (each rule maps to a real flakiness pattern found in production suites):
+**Rules for writing criteria that never come back ambiguous** (the category judge already enforces most of these; they still guide how you phrase the predicate):
 
 1. **Binary and observable.** The criterion must describe something two independent judges would always score identically: a concrete behavior, a phrase category, a countable action.
    - ✅ "El asistente menciona la política de reembolso de 30 días"

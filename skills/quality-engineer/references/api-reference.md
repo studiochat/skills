@@ -99,7 +99,7 @@ Tools not listed in `tool_mocks` are unaffected — they call the real implement
 - **`text`** — graded by the LLM judge (uses `--judge-model`).
 - **All other types** — graded **deterministically** by walking `turn.events` and `turn.tool_calls`. No LLM call, no judge-model cost, no flakiness. Prefer these whenever the check fits a structured shape.
 
-Legacy short form: a bare `{"criteria": "..."}` (no `type` field) is interpreted as `{"type": "text", "criteria": "..."}`. Both shapes round-trip cleanly.
+New text assertions carry a `category` (`"requerido"` / `"prohibido"`) that routes them to a specialized judge — see [`text`](#text--llm-as-judge) below. Legacy short form: a bare `{"criteria": "..."}` (no `type`, no `category`) is interpreted as `{"type": "text", "criteria": "..."}` and graded by the generic judge — kept for backwards compatibility, not for new cases.
 
 ### Discriminator
 
@@ -114,10 +114,28 @@ Legacy short form: a bare `{"criteria": "..."}` (no `type` field) is interpreted
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `type` | `"text"` | No | Defaults to `"text"`. |
-| `criteria` | string | Yes | Free-form claim about what the assistant said, graded by the LLM judge. |
+| `criteria` | string | Yes | The behavior being judged. See `category` for how to phrase it. |
+| `category` | `"requerido"` \| `"prohibido"` | No | Judge modality. **Set it on every new text assertion** (see below). Omit only when editing legacy free-text criteria. |
+
+**Always author text assertions with a `category`** — it routes the criterion to a specialized judge that is far less flaky than the generic one (it knows that negating/refusing X is not asserting X, that internal tool/skill actions are not things the assistant *said*, and that an equivalent question satisfies "asks for X"). The category also enforces an evidence contract: a failed prohibition / passed requirement must quote the exact offending / satisfying phrase.
+
+When `category` is set, write `criteria` as an **infinitive predicate** — no "the assistant…" prefix — so it reads as "El asistente debe / no debe {criteria}":
+
+- **`requerido`** (the assistant MUST do X). Covers stating info AND asking for data.
+  ```json
+  {"type": "text", "category": "requerido", "criteria": "mencionar el plazo máximo de acreditación para retiros en pesos"}
+  {"type": "text", "category": "requerido", "criteria": "pedir el número de operación"}
+  ```
+- **`prohibido`** (the assistant must NOT do X).
+  ```json
+  {"type": "text", "category": "prohibido", "criteria": "usar emojis"}
+  {"type": "text", "category": "prohibido", "criteria": "revelar el proveedor técnico de Pix"}
+  ```
+
+Legacy free text (no `category`) still runs on the generic judge — kept only for backwards compatibility. Do **not** author new criteria this way:
 
 ```json
-{"type": "text", "criteria": "The assistant mentions the 30-day refund policy"}
+{"type": "text", "criteria": "The assistant mentions the 30-day refund policy"}   // legacy — avoid in new cases
 ```
 
 ### `tool_called` — a named tool was invoked at least N times
@@ -239,7 +257,7 @@ A case can mix freely. Structured assertions are evaluated first (deterministic,
     {"type": "tool_not_called", "name": "human_handoff"},
     {"type": "priority_set", "value": "low"},
     {"type": "tag_added", "tag": "refund-completed"},
-    {"criteria": "The assistant confirms the refund amount in its reply"}
+    {"type": "text", "category": "requerido", "criteria": "confirmar el monto del reembolso en su respuesta"}
   ]
 }
 ```
