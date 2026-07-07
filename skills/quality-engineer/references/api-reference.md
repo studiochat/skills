@@ -115,24 +115,29 @@ New text assertions carry a `category` (`"required"` / `"prohibited"`) that rout
 |-------|------|----------|-------------|
 | `type` | `"text"` | No | Defaults to `"text"`. |
 | `criteria` | string | Yes | The behavior being judged. See `category` for how to phrase it. |
-| `category` | `"required"` \| `"prohibited"` | No | Judge modality. **Set it on every new text assertion** (see below). Omit only when editing legacy free-text criteria. |
+| `category` | `"content"` \| `"restriction"` \| `"knows"` | No | Judge modality. **Set it on every new text assertion** (see below). Omit only when editing legacy free-text criteria. Legacy `"required"`/`"prohibited"` still accepted → normalize to `content`/`restriction`. |
 
-**Always author text assertions with a `category`** — it routes the criterion to a specialized judge that is far less flaky than the generic one (it knows that negating/refusing X is not asserting X, that internal tool/skill actions are not things the assistant *said*, and that an equivalent question satisfies "asks for X"). The category also enforces an evidence contract: a failed prohibition / passed requirement must quote the exact offending / satisfying phrase.
+**Always author text assertions with a `category`** — it routes the criterion to a specialized judge, far less flaky than the generic one, that also enforces an evidence contract (the burden verdict must quote the exact phrase). Two axes:
 
-When `category` is set, write `criteria` as an **infinitive predicate** — no "the assistant…" prefix — so it reads as "El asistente debe / no debe {criteria}". The full authoring guide (when to use which, good/bad examples, framing, content requirements) is in [SKILL.md → `text` — LLM-as-judge](../SKILL.md); the essentials:
+- **OUTPUT** — what the assistant *says/does*:
+  - **`content`** (must say/do X) → *"El asistente debe {criteria}"*. Passes when X happens in ≥1 turn; the judge quotes the satisfying assistant phrase. Knows that paraphrase counts, that internal `[actions:]` are not things the assistant *said*.
+    ```json
+    {"type": "text", "category": "content", "criteria": "informar que el reembolso demora 48 horas hábiles"}
+    ```
+  - **`restriction`** (must NOT say/do X) → *"El asistente no debe {criteria}"*. Passes when X never happens; on failure quotes the offending phrase. Knows that negating/refusing X is not asserting X.
+    ```json
+    {"type": "text", "category": "restriction", "criteria": "usar emojis"}
+    {"type": "text", "category": "restriction", "criteria": "prometer la reversión inmediata del dinero"}
+    ```
+- **KNOWLEDGE** — what the assistant *ends up knowing*:
+  - **`knows`** (must possess datum X by the end) → *"El asistente debe conocer {criteria}"*. Passes if the value appears anywhere in the conversation — **whether the assistant asked for it OR the user volunteered it**. Fails only if the datum never appears (the assistant resolved/derived without it).
+    ```json
+    {"type": "text", "category": "knows", "criteria": "el número de operación, la moneda y el monto"}
+    ```
 
-- **`required`** (the assistant MUST do X). Covers stating info AND asking for data. Passes when X happens in ≥1 turn; the judge must quote the satisfying phrase.
-  ```json
-  {"type": "text", "category": "required", "criteria": "informar que el reembolso demora 48 horas hábiles"}
-  {"type": "text", "category": "required", "criteria": "pedir el número de pedido"}
-  ```
-- **`prohibited`** (the assistant must NOT do X). Passes when X never happens; on failure the judge must quote the offending phrase.
-  ```json
-  {"type": "text", "category": "prohibited", "criteria": "usar emojis"}
-  {"type": "text", "category": "prohibited", "criteria": "prometer la reversión inmediata del dinero"}
-  ```
+> **Use `knows`, not `content`, for data collection.** A criterion like *"pedir el número de operación"* (content: must ASK) is flaky — the scenario often has the user volunteer the datum, so the assistant never explicitly asks. `knows` asserts the **outcome** (the assistant possesses it), which is what matters and is consistent run-to-run.
 
-Prefer the framing a single verbatim quote can prove, and don't use `prohibited` for something a structured assertion checks deterministically (`no_handoff`, `tag_added`, `tool_not_called`). Bad criteria (`"ser cordial"`, degree words like `"muy empático"`, two checks in one) come back `ambiguous` with a rewrite suggestion.
+Write `criteria` as an infinitive predicate (content/restriction: a behavior; knows: the datum). Prefer the framing a single verbatim quote can prove; don't use `restriction` for something a structured assertion checks (`no_handoff`, `tool_not_called`). Vague criteria (`"ser cordial"`, degree words, two checks in one) come back `ambiguous` with a rewrite. Full guide in [SKILL.md → `text` — LLM-as-judge](../SKILL.md).
 
 Legacy free text (no `category`) still runs on the generic judge — kept only for backwards compatibility. Do **not** author new criteria this way:
 

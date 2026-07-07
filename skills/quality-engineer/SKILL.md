@@ -192,7 +192,7 @@ Scale coverage to the severity / scope of the fix: a narrow fix gets one regress
      "termination": "The assistant escalates to a human agent",
      "max_turns": 5,
      "assertions": [
-       {"type": "text", "category": "prohibited", "criteria": "inventar el estado del pedido"},
+       {"type": "text", "category": "restriction", "criteria": "inventar el estado del pedido"},
        {"type": "handoff"}
      ],
      "tool_mocks": {
@@ -1065,7 +1065,7 @@ Why it holds: the user has the datum the flow needs; every likely assistant move
   },
   "assertions": [
     {"type": "skill_loaded", "skill": "check-duplicates"},
-    {"type": "text", "category": "required", "criteria": "reconocer que existe una consulta previa sobre el mismo tema"}
+    {"type": "text", "category": "content", "criteria": "reconocer que existe una consulta previa sobre el mismo tema"}
   ]
 }
 ```
@@ -1095,8 +1095,8 @@ Every new text assertion sets a **`category`**: the polarity of the check. It ro
 Write `criteria` as an **infinitive predicate, with no "the assistant…" prefix** — the category supplies "El asistente debe / no debe {criteria}".
 
 ```json
-{"type": "text", "category": "required",   "criteria": "informar el plazo de entrega estimado"}
-{"type": "text", "category": "prohibited", "criteria": "usar emojis"}
+{"type": "text", "category": "content",   "criteria": "informar el plazo de entrega estimado"}
+{"type": "text", "category": "restriction", "criteria": "usar emojis"}
 ```
 
 **Ternary verdict.** `AssertionResult.verdict` is `passed`, `failed`, or **`ambiguous`** (the legacy `passed` boolean maps `ambiguous` → `true`). A criterion too vague to score objectively comes back `ambiguous` with a `rewrite_suggestion` instead of a guessed pass/fail — see [The `ambiguous` verdict](#the-ambiguous-verdict--criteria-lint).
@@ -1107,17 +1107,17 @@ Assert that a specific thing **is said, asked, or done in words**: a fact the an
 
 ✅ Good — each names one observable thing:
 ```json
-{"type": "text", "category": "required", "criteria": "informar que el reembolso demora 48 horas hábiles"}
-{"type": "text", "category": "required", "criteria": "pedir el número de pedido"}
-{"type": "text", "category": "required", "criteria": "ofrecer una disculpa por la demora"}
-{"type": "text", "category": "required", "criteria": "confirmar el monto del reembolso en la respuesta"}
+{"type": "text", "category": "content", "criteria": "informar que el reembolso demora 48 horas hábiles"}
+{"type": "text", "category": "content", "criteria": "pedir el número de pedido"}
+{"type": "text", "category": "content", "criteria": "ofrecer una disculpa por la demora"}
+{"type": "text", "category": "content", "criteria": "confirmar el monto del reembolso en la respuesta"}
 ```
 
 ❌ Bad:
 ```json
-{"type": "text", "category": "required", "criteria": "ser claro y útil"}              // undefined quality → ambiguous
-{"type": "text", "category": "required", "criteria": "responder muy rápido y bien"}    // degree word + two checks
-{"type": "text", "category": "required", "criteria": "pedir el número de pedido y la fecha"} // two asks → split in two
+{"type": "text", "category": "content", "criteria": "ser claro y útil"}              // undefined quality → ambiguous
+{"type": "text", "category": "content", "criteria": "responder muy rápido y bien"}    // degree word + two checks
+{"type": "text", "category": "content", "criteria": "pedir el número de pedido y la fecha"} // two asks → split in two
 ```
 
 > **Asking ≠ mentioning.** An ask-style `required` ("pedir X") passes only when the assistant actually **requests the user provide X** — a question or an imperative. Merely mentioning the datum, or telling the user where to find it, does NOT satisfy it. Equivalent questions count: "¿fue hoy o hace cuánto?" satisfies "pedir la fecha".
@@ -1128,16 +1128,16 @@ Assert a forbidden behavior or content **never appears**: a leaked internal deta
 
 ✅ Good:
 ```json
-{"type": "text", "category": "prohibited", "criteria": "usar emojis"}
-{"type": "text", "category": "prohibited", "criteria": "prometer la reversión inmediata del dinero"}
-{"type": "text", "category": "prohibited", "criteria": "adelantar un veredicto sobre la garantía"}
-{"type": "text", "category": "prohibited", "criteria": "inventar un estado de pedido que la tool no devolvió"}
+{"type": "text", "category": "restriction", "criteria": "usar emojis"}
+{"type": "text", "category": "restriction", "criteria": "prometer la reversión inmediata del dinero"}
+{"type": "text", "category": "restriction", "criteria": "adelantar un veredicto sobre la garantía"}
+{"type": "text", "category": "restriction", "criteria": "inventar un estado de pedido que la tool no devolvió"}
 ```
 
 ❌ Bad:
 ```json
-{"type": "text", "category": "prohibited", "criteria": "ser descortés"}      // undefined quality → ambiguous
-{"type": "text", "category": "prohibited", "criteria": "no derivar el caso"} // double negative — see the framing note below
+{"type": "text", "category": "restriction", "criteria": "ser descortés"}      // undefined quality → ambiguous
+{"type": "text", "category": "restriction", "criteria": "no derivar el caso"} // double negative — see the framing note below
 ```
 
 > **Negation ≠ assertion.** The judge knows that *referring* to the forbidden thing to negate/refuse/reassure is not *doing* it: "por ese lado no hay problema" does not violate "no debe decir que hay un problema"; "no puedo recomendarte medicamentos" does not violate "no debe recomendar medicamentos". And internal `[actions: …]` (tool/skill/attribute events) never count as things the assistant *said* — a KB search that surfaced a word does not mean the assistant told it to the user.
