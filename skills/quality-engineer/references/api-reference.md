@@ -99,7 +99,7 @@ Tools not listed in `tool_mocks` are unaffected — they call the real implement
 - **`text`** — graded by the LLM judge (uses `--judge-model`).
 - **All other types** — graded **deterministically** by walking `turn.events` and `turn.tool_calls`. No LLM call, no judge-model cost, no flakiness. Prefer these whenever the check fits a structured shape.
 
-New text assertions carry a `category` (`"required"` / `"prohibited"`) that routes them to a specialized judge — see [`text`](#text--llm-as-judge) below. Legacy short form: a bare `{"criteria": "..."}` (no `type`, no `category`) is interpreted as `{"type": "text", "criteria": "..."}` and graded by the generic judge — kept for backwards compatibility, not for new cases.
+New text assertions carry a `category` (`"content"` / `"restriction"` / `"knows"`) that routes them to a specialized judge — see [`text`](#text--llm-as-judge) below. Generic free text (a bare `{"criteria": "..."}` with no `category`) is **no longer authored** — every text assertion must carry one of the three categories.
 
 ### Discriminator
 
@@ -264,7 +264,7 @@ A case can mix freely. Structured assertions are evaluated first (deterministic,
     {"type": "tool_not_called", "name": "human_handoff"},
     {"type": "priority_set", "value": "low"},
     {"type": "tag_added", "tag": "refund-completed"},
-    {"type": "text", "category": "required", "criteria": "confirmar el monto del reembolso en su respuesta"}
+    {"type": "text", "category": "content", "criteria": "confirmar el monto del reembolso en su respuesta"}
   ]
 }
 ```
