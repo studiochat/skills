@@ -289,7 +289,7 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Quiero un reembolso de OR
 # Dry-run a candidate eval case WITHOUT persisting it (validate the case
 # definition before committing it via `cases create`)
 python3 scripts/qa.py dry-run start PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
-    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"type":"text","category":"required","criteria":"..."}]}'
+    --case '{"name":"poc","scenario":"...","termination":"...","assertions":[{"type":"text","category":"content","criteria":"..."}]}'
 python3 scripts/qa.py dry-run status DRY_RUN_ID
 python3 scripts/qa.py dry-run cancel DRY_RUN_ID
 ```
@@ -831,6 +831,31 @@ Use this when one case needs a different user identity, plan, or simulated state
 
 ## Writing Good Test Cases
 
+### Before you write a case — reuse first, create last
+
+**A new case is the last resort, not the default.** The reflex to spin up a fresh case for every behavior you want to check breeds a suite full of near-duplicates: slow to run, expensive, and impossible to maintain. Treat eval cases exactly like source-code tests — when you add or change behavior, your first question is *"which existing test already exercises this flow, and can I extend or adapt it?"*, never *"let me write a new one."*
+
+**Do this every time, before authoring a new case:**
+
+1. **List all existing cases** (`qa.py cases list PLAYBOOK_BASE_ID`) and scan for ones that already exercise the same flow — same product area, same `first_message` intent, same skill/casuística, same handoff/close shape.
+2. **Decide in this order (stop at the first that fits):**
+   - **Add assertions to an existing case.** If a case already drives the conversation to the state you need, just add your assertion(s) to it. One rich scenario carries many assertions — far cheaper and more coherent than a second near-identical scenario. (e.g. a case that already collects the operation data → add a `knows` assertion for the new mandatory datum; a derivation case → add a `restriction` for the new thing it must not do.)
+   - **Adapt an existing case.** If the scenario is *almost* right, widen it: add a `reacciones` branch, add a `datos` value, or adjust `primer_mensaje`/`terminacion` so the one case covers both the old and the new behavior. Rewriting a condition to cover more is usually better than a new case.
+   - **Only then, a new case** — when the behavior genuinely can't ride on any existing scenario (different flow, different `objetivo`, a real coverage gap).
+3. **State what you did and why** — "extended `retiro-pendiente-datos` with a `knows` assertion" / "new case: no existing scenario reaches the COELSA flow". Never silently add a duplicate.
+
+This is the same discipline as code tests: a change forces you to review the existing tests first and choose add-vs-adapt-vs-new. Skipping it is how suites rot into hundreds of redundant cases.
+
+### Case naming — the prefix is a UI grouping key
+
+**The UI groups cases by the prefix before the first `-`** (`retiro-pendiente-sin-info` → group **retiro**; `cobro-pix-tag-aplicado` → group **cobro**). The name is not just a label — it decides where the case lands in the reviewer's grouped view.
+
+Before naming a new case:
+
+1. **Read the existing prefixes** (`qa.py cases list` → look at the names). They are the suite's taxonomy (`ajuste-*`, `cobro-pix-*`, `retiro-*`, `cierre-*`, `no-cierra-*`, `pix-*`, `taxonomia-*`, …).
+2. **Reuse the right prefix** so the case sits with its family. A new closing-behavior case is `cierre-…` / `no-cierra-…`, never `test-closing-2`. A wrong prefix scatters related cases across unrelated groups.
+3. Keep the rest a short kebab-case description of the specific behavior (`cierre-solo-emoji`, `retiro-fraude-sin-emojis`).
+
 ### Scenario Guidelines — the structured scenario framework
 
 #### The concept
@@ -888,12 +913,14 @@ This is the contract that makes each field matter — author them knowing how th
       {"si": "ofrece alternativas como reprogramar la entrega", "entonces": "rechazarlas, solo quiere cancelar"},
       {"si": "deriva a una persona del equipo", "entonces": "aceptar y despedirse"}
     ],
+    "catch_all": "responder breve y neutro, sin inventar datos ni cambiar de tema",
+    "cierre": "cuando el asistente confirmó la cancelación, agradecer y despedirse en UN mensaje",
     "primer_mensaje": "Hola, quiero cancelar un pedido",
     "terminacion": "El asistente confirmó la cancelación del pedido"
   },
   "assertions": [
     {"type": "tool_called", "name": "cancelar-pedido"},
-    {"type": "text", "criteria": "El asistente confirma al usuario que el pedido quedó cancelado"}
+    {"type": "text", "category": "restriction", "criteria": "insistir con reprogramar la entrega después de que el usuario la rechazó"}
   ],
   "tool_mocks": {
     "cancelar-pedido": {"match_kind": "any", "return_value": {"order_id": 88421, "cancelled": true}}
@@ -901,7 +928,7 @@ This is the contract that makes each field matter — author them knowing how th
 }
 ```
 
-Optional fields and their defaults: `catch_all` ("responder breve y neutro, sin inventar datos"), `cierre` (close in ONE message when the goal is met), `terminacion` (may instead be given as the case's top-level `termination`). `primer_mensaje` is **required** (here or as top-level `first_message`).
+**Every field is required — no partial scenarios.** A well-defined scenario fills ALL of: `persona`, `objetivo`, `datos`, `reacciones`, `catch_all`, `cierre`, `primer_mensaje`, `terminacion`. **This skill does not author (or accept) scenarios with missing fields.** An undefined field is a degree of freedom the simulator fills by improvising — exactly the run-to-run flakiness the framework exists to remove. Fill every one, including the "obvious" defaults (`catch_all`: "responder breve y neutro, sin inventar datos ni cambiar de tema"; `cierre`: "cuando el objetivo se cumpla, agradecer y despedirse en UN solo mensaje"). `primer_mensaje` may also be given as the case's top-level `first_message`, and `terminacion` as top-level `termination` — but they must be present.
 
 #### Authoring procedure — write every case in this order
 
@@ -936,6 +963,7 @@ What this means when authoring:
 - **NEVER invent business data — ask first.** The `datos` block and the `tool_mocks` need realistic, consistent values (order IDs, product names, amounts, dates). If you don't know what those look like in this business — what products exist, what an order ID format is, which states an order can be in — **stop and ask the user** before authoring the case. An invented datum produces a case that tests a flow the business doesn't have, and mocks that drift from the real API shape. Asking costs one message; a suite built on invented data costs every future debugging session.
 - **The scenario describes the USER, never the assistant.** "El asistente deberá pedir el ID" does not belong in a scenario — that's an assertion. A scenario that scripts the assistant confuses the simulator into playing both roles.
 - **One objective per scenario.** Two goals ("cancelar el pedido y de paso preguntar precios") produce conversations that satisfy assertions in unpredictable order. Split into two cases.
+- **All eight scenario fields must be defined** — `persona`, `objetivo`, `datos`, `reacciones`, `catch_all`, `cierre`, `primer_mensaje`, `terminacion`. A scenario with a blank field is not accepted; fill every one (with the sensible default if nothing special applies) so nothing is left to the simulator's improvisation.
 - **Refusals must be explicit and covered against insistence.** A refusal case does NOT list the datum (not listed = doesn't exist) AND covers the assistant's follow-up attempts in reacciones (e.g. `{"si": "pide el número", "entonces": "decir que no lo encuentra, aunque insista"}`, `{"si": "ofrece buscarlo por otro medio", "entonces": "decir que tampoco tiene ese dato"}`). The simulator holds refusals the scenario dictates — but only those.
 - **Don't contradict the playbook**: a case expecting "indaga antes de derivar" while the scenario has the user demanding a human (which the playbook answers with an immediate handoff) will flip forever. Align the expectation with the playbook rule, or change the scenario trigger.
 - **Mocks must mirror the real API's shape**: if the list endpoint mock includes prices, the assistant never needs the detail tool — and your `tool_called` assertion fails for the wrong reason.
@@ -979,12 +1007,14 @@ What this means when authoring:
       {"si": "ofrece alternativas como reprogramar", "entonces": "rechazarlas, solo quiere cancelar"},
       {"si": "deriva a una persona del equipo", "entonces": "aceptar y despedirse"}
     ],
+    "catch_all": "responder breve y neutro, sin inventar datos ni cambiar de tema",
+    "cierre": "cuando el asistente confirmó la cancelación, agradecer y despedirse en UN mensaje",
     "primer_mensaje": "Hola, quiero cancelar un pedido",
     "terminacion": "El asistente confirmó la cancelación del pedido"
   },
   "assertions": [
     {"type": "tool_called", "name": "cancelar-pedido"},
-    {"type": "text", "criteria": "El asistente confirma al usuario que el pedido quedó cancelado"}
+    {"type": "text", "category": "restriction", "criteria": "insistir con reprogramar la entrega después de que el usuario la rechazó"}
   ],
   "tool_mocks": {
     "cancelar-pedido": {"match_kind": "any", "return_value": {"order_id": 88421, "cancelled": true}}
@@ -1076,7 +1106,7 @@ Why it holds: the user has the datum the flow needs; every likely assistant move
 
 Assertions live on `EvalCase.assertions` as a list of typed objects. There are **two families**:
 
-- **Text** (`type: "text"`) — graded by the LLM judge. Use for free-form claims about what the assistant said.
+- **Text** (`type: "text"`) — graded by the LLM judge. Use for what the assistant *said* (content, style, a policy it mentioned). **Always carries a `category`** — `content`, `restriction`, or `knows` (see below); generic free text is no longer authored.
 - **Structured** (everything else) — graded deterministically by walking `turn.events` and `turn.tool_calls`. No LLM call. Faster, cheaper, and immune to judge flakiness — prefer these whenever the check fits a structured shape.
 
 The `--judge-model` flag affects only text assertions. Structured assertions ignore it.
@@ -1085,44 +1115,59 @@ The `--judge-model` flag affects only text assertions. Structured assertions ign
 
 #### `text` — LLM-as-judge (author with a `category`)
 
-Every new text assertion sets a **`category`**: the polarity of the check. It routes the criterion to a specialized judge and, crucially, **inverts the burden of proof** — which is what makes these far less flaky than generic free text. Two options, shown in the UI as "El asistente debe / no debe":
+Every text assertion **must** set a **`category`** — one of exactly three. Generic free-text criteria (no category) are **no longer supported**: they run on the flaky generic judge and must not be authored. The category routes the criterion to a specialized judge and **inverts the burden of proof** (the judge must produce a verbatim quote), which is what makes categorized assertions far less flaky than free text.
 
-| Category | Means | Passes when… | Evidence the judge must produce |
-|---|---|---|---|
-| `required` | the assistant **must** do X | X happens in ≥1 turn | the verbatim phrase that satisfies X (+ its turn) |
-| `prohibited` | the assistant **must not** do X | X never happens | on failure, the verbatim phrase that violates X |
+The three categories sit on **two axes** — what the assistant OUTPUTS, and what it KNOWS:
 
-Write `criteria` as an **infinitive predicate, with no "the assistant…" prefix** — the category supplies "El asistente debe / no debe {criteria}".
+| Category | Axis | Means | Passes when… | UI label |
+|---|---|---|---|---|
+| `content` | output | the assistant **says/does** X | X appears in ≥1 assistant turn (paraphrase counts) | "El asistente debe" |
+| `restriction` | output | the assistant **must not** say/do X | X never appears | "El asistente no debe" |
+| `knows` | knowledge | the assistant **ends up possessing** datum X | X appears anywhere in the conversation — asked OR volunteered | "El asistente debe conocer" |
+
+Write `criteria` as an **infinitive predicate with no "the assistant…" prefix** — the category supplies the stem:
 
 ```json
-{"type": "text", "category": "content",   "criteria": "informar el plazo de entrega estimado"}
+{"type": "text", "category": "content",     "criteria": "informar el plazo de entrega estimado"}
 {"type": "text", "category": "restriction", "criteria": "usar emojis"}
+{"type": "text", "category": "knows",       "criteria": "el número de operación y el monto"}
 ```
+
+**How to author one:** add `{"type": "text", "category": "<content|restriction|knows>", "criteria": "<infinitive predicate>"}` to `EvalCase.assertions`. In the UI it's the "El asistente debe / no debe / debe conocer" picker — every text assertion goes through one of those three; **there is no free-text option**.
 
 **Ternary verdict.** `AssertionResult.verdict` is `passed`, `failed`, or **`ambiguous`** (the legacy `passed` boolean maps `ambiguous` → `true`). A criterion too vague to score objectively comes back `ambiguous` with a `rewrite_suggestion` instead of a guessed pass/fail — see [The `ambiguous` verdict](#the-ambiguous-verdict--criteria-lint).
 
-##### When to use `required`
+##### `knows` — measure the OUTCOME of data collection, not the ask
 
-Assert that a specific thing **is said, asked, or done in words**: a fact the answer must contain, a question the assistant must ask, an action it must state it is taking. `required` covers both *informing* and *asking for data*.
+**The single most important thing to get right.** When a case needs the assistant to *gather* data (an operation number, an amount, a bank), assert that it **KNOWS** the datum — never that it "asks for" it:
+
+- ❌ `content` "pedir el número de operación" — **flaky**. The scenario usually has the user volunteer the datum (or give it upfront), so the assistant never asks explicitly and the check fails spuriously.
+- ✅ `knows` "el número de operación" — **robust**. Passes if the value appears anywhere in the conversation — whether the assistant asked or the user offered it. That is what actually matters: does the assistant END UP with the data before it acts?
+
+`knows` fails only when the datum **never appears** — e.g. the assistant resolved or derived without ever obtaining it (a real behavior gap worth catching). If the criterion names several data ("el número, la moneda y el monto"), all must appear. Keep each `knows` to data that is reliably present: if one datum is implicit (e.g. the currency on an ARS-only flow), it will be missing → drop it from the set and note it as a finding, rather than let the assertion flake.
+
+##### When to use `content` (the assistant must say/do X)
+
+Assert that a specific thing **is said or stated**: a fact the answer must contain, a piece of empathy, an action it states it is taking.
 
 ✅ Good — each names one observable thing:
 ```json
 {"type": "text", "category": "content", "criteria": "informar que el reembolso demora 48 horas hábiles"}
-{"type": "text", "category": "content", "criteria": "pedir el número de pedido"}
 {"type": "text", "category": "content", "criteria": "ofrecer una disculpa por la demora"}
+{"type": "text", "category": "content", "criteria": "identificar que se trata de una transferencia interna"}
 {"type": "text", "category": "content", "criteria": "confirmar el monto del reembolso en la respuesta"}
 ```
 
 ❌ Bad:
 ```json
-{"type": "text", "category": "content", "criteria": "ser claro y útil"}              // undefined quality → ambiguous
-{"type": "text", "category": "content", "criteria": "responder muy rápido y bien"}    // degree word + two checks
-{"type": "text", "category": "content", "criteria": "pedir el número de pedido y la fecha"} // two asks → split in two
+{"type": "text", "category": "content", "criteria": "ser claro y útil"}                // undefined quality → ambiguous
+{"type": "text", "category": "content", "criteria": "responder muy rápido y bien"}      // degree word + two checks
+{"type": "text", "category": "content", "criteria": "pedir el número de pedido"}        // data collection → use `knows`
 ```
 
-> **Asking ≠ mentioning.** An ask-style `required` ("pedir X") passes only when the assistant actually **requests the user provide X** — a question or an imperative. Merely mentioning the datum, or telling the user where to find it, does NOT satisfy it. Equivalent questions count: "¿fue hoy o hace cuánto?" satisfies "pedir la fecha".
+> **`content` is for what the assistant *tells the user*, not for gathering data.** If the check is that the assistant obtains a datum, use `knows` (the outcome) — never `content` "pedir X".
 
-##### When to use `prohibited`
+##### When to use `restriction` (the assistant must not say/do X)
 
 Assert a forbidden behavior or content **never appears**: a leaked internal detail, a promise the assistant may not make, a style rule, a wrong value.
 
@@ -1142,14 +1187,15 @@ Assert a forbidden behavior or content **never appears**: a leaked internal deta
 
 > **Negation ≠ assertion.** The judge knows that *referring* to the forbidden thing to negate/refuse/reassure is not *doing* it: "por ese lado no hay problema" does not violate "no debe decir que hay un problema"; "no puedo recomendarte medicamentos" does not violate "no debe recomendar medicamentos". And internal `[actions: …]` (tool/skill/attribute events) never count as things the assistant *said* — a KB search that surfaced a word does not mean the assistant told it to the user.
 
-##### `required` vs `prohibited` — picking the framing
+##### Picking the framing — `content` vs `restriction` vs `knows`
 
-The same intent can often be written either way. Rules of thumb:
+Rules of thumb:
 
-- If there is a **specific thing the answer must contain**, use `required` — its evidence is the satisfying quote.
-- If the risk is that the assistant **says a specific wrong/forbidden thing**, use `prohibited` — its evidence is the offending quote.
-- Prefer the framing a **single verbatim quote** can prove. "stay within the stated replacement window" is better as `required` "informar que la reposición demora 5 días hábiles" (one quote proves it) than as `prohibited` "adelantar cualquier otro plazo" (you would have to disprove every alternative).
-- **Don't** use `prohibited` for something a structured assertion checks deterministically: "no debe derivar" → `no_handoff`; "debe etiquetar como X" → `tag_added`; "no debe llamar refund con estos args" → `tool_not_called`. Deterministic beats judged.
+- **Gathering data** → `knows` (the outcome), never `content` "pedir X". This is the most common mistake — see the `knows` section above.
+- **A specific thing the answer must contain** → `content` — evidence is the satisfying quote.
+- **A specific wrong/forbidden thing it must not say** → `restriction` — evidence is the offending quote.
+- Prefer the framing a **single verbatim quote** can prove. "stay within the stated replacement window" is better as `content` "informar que la reposición demora 5 días hábiles" (one quote proves it) than as `restriction` "adelantar cualquier otro plazo" (you would have to disprove every alternative).
+- **Don't** use `restriction` for something a structured assertion checks deterministically: "no debe derivar" → `no_handoff`; "debe etiquetar como X" → `tag_added`; "no debe llamar refund con estos args" → `tool_not_called`. Deterministic beats judged.
 
 ##### Asserting content — "the assistant must say X"
 
@@ -1157,7 +1203,7 @@ Three shapes, most to least specific:
 
 - **A specific fact** — the value must appear: `"informar que el envío demora 24 a 48 horas"`. Pin an exact figure only when it is the point; the judge accepts paraphrase, but not a *different* number.
 - **A phrase category** — any member of a class satisfies it: `"incluir al menos una frase de empatía (p. ej. 'lamento lo que pasó')"`. Put an example in parentheses so the class is anchored, not subjective.
-- **A value from context/tool** — pin the value deterministically with a mock or a `tool_called` args-match, then let the `required` text criterion check it reached the user. E.g. mock `obtener-pedido` → `{"estado": "en preparación"}`, then `{"type":"text","category":"required","criteria":"informar que el pedido está en preparación"}`.
+- **A value from context/tool** — pin the value deterministically with a mock or a `tool_called` args-match, then let a `content` text criterion check it reached the user. E.g. mock `obtener-pedido` → `{"estado": "en preparación"}`, then `{"type":"text","category":"content","criteria":"informar que el pedido está en preparación"}`.
 
 Never assert a value the assistant cannot know (no tool or KB provides it) — that tests the fixture, not the assistant.
 
@@ -1170,12 +1216,13 @@ The category judge already enforces negation-vs-assertion, say-vs-do, and paraph
 3. **Conditionals need the scenario to force the condition** — "cuando Y, entonces X" passes *vacuously* if the simulated user never does Y. If you write one, make the scenario's `reacciones` produce Y.
 4. **Semantic match, not literal** — don't demand exact wording unless the wording itself is the requirement.
 
-##### Legacy free text — do not author
+##### Free text — NO LONGER SUPPORTED
 
-A bare `{"criteria": "…"}` with no `category` still runs, on the generic judge, kept only for backwards compatibility:
+A bare `{"criteria": "…"}` with no `category` is **not authored**. Generic free text runs on the flaky generic judge and is the exact thing the three categories replace. **Every text assertion must carry a `category`** (`content`, `restriction`, or `knows`). If you catch yourself writing a criterion that fits none of the three, it's a sign the check belongs to a structured assertion type (tool/tag/handoff/skill) — reach for that instead.
 
 ```json
-{"criteria": "The assistant mentions the 30-day refund policy"}   // legacy — avoid in new cases
+{"criteria": "The assistant mentions the 30-day refund policy"}                          // ❌ no category → do NOT author
+{"type": "text", "category": "content", "criteria": "mencionar la política de reembolso de 30 días"}  // ✅ categorized
 ```
 
 #### `tool_called` — a specific tool was invoked
