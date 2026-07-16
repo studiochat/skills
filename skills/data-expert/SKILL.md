@@ -1109,3 +1109,16 @@ python3 scripts/fetch.py \
   --params sentiment_shift=degraded limit=100 \
   -o degraded.json
 ```
+
+## Gotchas
+
+- **`playbook_base_id` para filtrar por asistente (todas las versiones), `playbook_id` para una versión específica.** Mezclarlos devuelve datos inconsistentes.
+- **Timezone: los timestamps de la API están en UTC.** Buenos Aires es UTC-3 (UTC-2 en verano). Ajustar siempre antes de mostrar fechas al usuario.
+- **Deflection rate = conversaciones sin handoff / total.** Si el cliente tiene handoffs manuales por canales fuera de Studio Chat, el denominador puede estar subestimado.
+- **CSAT solo aparece si el cliente lo habilitó.** No asumir que está disponible. Si el endpoint devuelve vacío, informarlo.
+- **Las métricas de conversión custom (`conversion-metrics`) son por slug, no auto-descubribles.** Necesitás saber el slug configurado para esa cuenta — no se puede listar todos.
+- **Volúmenes bajos hacen que los porcentajes sean engañosos.** Siempre mostrar el denominador (N conversaciones) junto con el rate. Un 95% de deflección sobre 20 conversaciones no es un dato publicable.
+
+## Dependencias
+
+`customer-success:data-expert` es dependencia de: `finance:invoice-generator`, `sales-marketing:case-study-generator`, `suggestions:kb-suggestions`, `customer-success:report-builder` (indirectamente).
