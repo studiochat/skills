@@ -190,3 +190,14 @@ Deep dive into the Cotizador assistant.
 ## API Reference
 
 Full endpoint documentation: [references/api-reference.md](references/api-reference.md)
+
+## Gotchas
+
+- **Los reportes son definiciones, no ejecuciones.** Este skill configura qué debe reportar SAMI y cuándo. No genera el reporte en sí — eso lo hace SAMI automáticamente según el schedule.
+- **Las instrucciones del reporte deben ser en lenguaje natural claro.** SAMI las interpreta como si fuera un prompt — si son ambiguas, el output va a variar. Usar el Block Kit format para estructura consistente.
+- **`playbook_base_ids` filtra por asistente** — si no se especifica, el reporte agrega todos los asistentes del proyecto.
+- **Los reportes en Slack requieren el webhook configurado en la cuenta.** Verificar que el cliente tenga el Slack webhook activo antes de configurar delivery.
+
+## Dependencias
+
+Los reportes se ejecutan internamente con acceso a `customer-success:data-expert`. El skill de report-builder solo define el *qué* y *cuándo*.

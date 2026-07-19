@@ -1388,3 +1388,16 @@ python3 scripts/api.py \
 - **Skills versioning**: Skill changes (add/edit/delete) also create new playbook versions. Use the dedicated skill endpoints for individual operations.
 - **base_id vs playbook_id**: Active version endpoints use `base_id` (stable across versions). Other endpoints use `playbook_id` (specific version). Skill endpoints use `base_id`.
 - **Soft deletes**: Delete operations are soft — use restore to undo.
+
+## Gotchas
+
+- **Con sandbox key (`sbs_`), las writes son 202 pending — siempre adjuntar descripción al approval.** El reviewe solo ve el description que adjuntás, no el payload raw. Si no describís, el approval queda sin contexto.
+- **`playbook_base_id` para gestión de versiones, `playbook_id` para una versión específica.** Confundirlos lleva a crear versiones duplicadas.
+- **Nunca eliminar KBs sin confirmar que no están linkeadas a otros asistentes.** Una KB puede estar compartida entre varios playbooks del mismo proyecto.
+- **Los `pills` (template macros) deben existir como objetos en la API antes de referenciarlos en instrucciones.** Si el pill `{{nombre_cliente}}` no existe como template variable registrada, la instrucción lo trata como texto literal.
+- **Trending topics se generan en background — no son instantáneos.** Después de habilitarlos, hay un delay de procesamiento. No asumir que están disponibles inmediatamente.
+- **El campo `content` de las instrucciones tiene límite de tokens.** Si las instrucciones son muy largas, el asistente puede truncar en producción. Preferir casuísticas para comportamientos específicos.
+
+## Dependencias
+
+Este skill es la base que usan `customer-success:continuous-improvement` y `customer-success:quality-engineer` para modificar asistentes.
