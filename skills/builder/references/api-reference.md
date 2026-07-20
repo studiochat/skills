@@ -358,26 +358,47 @@ endpoints let you **discover, audit, and edit** those configs by API.
 All accept the project API token (`X-API-Key: sbs_…`).
 
 ### List connected toolkits
-`GET /projects/{pid}/custom-toolkits` → toolkits with connection status.
+`GET /projects/{pid}/custom-toolkits` → every registered toolkit with connection status
+(`is_connected`, `connected_account_id`).
+
+### Is a specific toolkit connected? (prerequisite to use its actions)
+`GET /projects/{pid}/custom-toolkits/{toolkit_slug}/status`
+
+A toolkit's actions can only be configured/called once it is **connected**. Check first:
+
+```json
+{"toolkit_slug": "INTERCOM_TICKETS", "name": "Intercom Tickets", "auth_type": "api_key",
+ "is_connected": true, "connected_account_id": "conn-abc123",
+ "tools": ["INTERCOM_TICKETS_CREATE_TICKET", "INTERCOM_TICKETS_GET_TICKET", "INTERCOM_TICKETS_FIND_TICKETS"]}
+```
+
+If `is_connected` is `false`, **ask the user to connect the toolkit** (it needs credentials/OAuth) and
+stop — you cannot create a tool configuration without `connected_account_id`. Use it as the
+`toolkit_connection_id` when creating a config.
 
 ### List a toolkit's actions and their configurable schema
 `GET /projects/{pid}/custom-toolkits/{toolkit_slug}/actions`
 
-Returns each action (`tool_slug`) with the fields you can configure:
+Returns the connection status plus each action (`tool_slug`) with the fields you can configure:
 
 ```json
-[
-  {
-    "tool_slug": "INTERCOM_TICKETS_CREATE_TICKET",
-    "params": [
-      {"key": "ticket_type_id", "label": "Ticket Type", "type": "select", "required": true,
-       "llm_decideable": false, "metadata_source": "ticket_types",
-       "dynamic_children": {"metadata_source": "ticket_type_attributes", "parent_key_param": "ticket_type_id"}},
-      {"key": "contact_email", "label": "Contact Email", "type": "text", "required": true}
-    ],
-    "metadata_sources": ["ticket_types", "ticket_type_attributes"]
-  }
-]
+{
+  "toolkit_slug": "INTERCOM_TICKETS",
+  "is_connected": true,
+  "connected_account_id": "conn-abc123",
+  "actions": [
+    {
+      "tool_slug": "INTERCOM_TICKETS_CREATE_TICKET",
+      "params": [
+        {"key": "ticket_type_id", "label": "Ticket Type", "type": "select", "required": true,
+         "llm_decideable": false, "metadata_source": "ticket_types",
+         "dynamic_children": {"metadata_source": "ticket_type_attributes", "parent_key_param": "ticket_type_id"}},
+        {"key": "contact_email", "label": "Contact Email", "type": "text", "required": true}
+      ],
+      "metadata_sources": ["ticket_types", "ticket_type_attributes"]
+    }
+  ]
+}
 ```
 
 ### Fetch dynamic options (attributes, types, values)

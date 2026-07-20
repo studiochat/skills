@@ -959,7 +959,10 @@ When the customer reports an outage, post a heads-up with {{ custom_tool: notify
 # List existing configs (each shows in_use + usages — reuse before creating duplicates)
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations"
 
-# See a toolkit action's configurable schema (fields, required, metadata_sources)
+# Is the toolkit connected? (must be true before its actions can be used)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-toolkits/INTERCOM_TICKETS/status"
+
+# See a toolkit action's configurable schema (fields, required, metadata_sources) + is_connected
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-toolkits/INTERCOM_TICKETS/actions"
 
 # Effective per-attribute view of one pill + detected problems (required-but-empty, etc.)
