@@ -246,7 +246,7 @@ python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/playbooks"
 python3 scripts/api.py \
   "/projects/$STUDIO_PROJECT_ID/playbooks" \
   -X POST --body '{
-    "name": "Support Bot",
+    "name": "Support Assistant",
     "content": "You are a helpful support assistant.\n\nRules:\n- Be concise and friendly\n- Escalate billing disputes",
     "kb_ids": ["KB_ID_1", "KB_ID_2"]
   }'
@@ -1107,7 +1107,7 @@ a structured filter, evaluated on a cron schedule. When the count crosses the th
 monitor fires and ships a notification to Slack and/or email.
 
 Use **monitors** when the question is "how many?" (e.g. _more than 50 handoffs in the last
-hour_). Use **alerts** when the question is "is the bot misbehaving?" — alerts run a
+hour_). Use **alerts** when the question is "is the assistant misbehaving?" — alerts run a
 natural-language check via the data-expert skill, monitors don't read messages at all.
 
 Like alerts, the cron has a **10-minute minimum interval**.

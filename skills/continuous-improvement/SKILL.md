@@ -313,7 +313,7 @@ casuística should carry an `{{ examples: ... }}` block, not a described tone.
 
 ---
 
-## Worked example — "no quiero que el bot prometa reembolsos fuera de política"
+## Worked example — "no quiero que el agente prometa reembolsos fuera de política"
 
 1. **Clarify** — desired: when an order is outside the 30-day window, the assistant explains the
    policy and escalates instead of promising a refund. Edge case: what if the user is a VIP?

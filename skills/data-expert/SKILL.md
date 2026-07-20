@@ -592,7 +592,7 @@ with open("metrics_agg.json") as f:
 
 total = agg["total_scored_conversations"]
 
-# Deflection quality — how well bot-resolved conversations actually went
+# Deflection quality — how well assistant-resolved conversations actually went
 defl = agg.get("deflection_quality_distribution", {})
 print("Deflection Quality:")
 for label in ["resolved", "partial", "actioned", "no_response"]:
@@ -616,7 +616,7 @@ for label in ["low", "medium", "high"]:
     pct = (count / total * 100) if total else 0
     print(f"  {label}: {count} ({pct:.1f}%)")
 
-# Sentiment shift — did the bot make things better or worse?
+# Sentiment shift — did the assistant make things better or worse?
 shift = agg.get("sentiment_shift_distribution", {})
 print("\nSentiment Shift:")
 for label in ["improved", "stable", "degraded"]:
@@ -1046,7 +1046,7 @@ Always scope queries with `start_date` and `end_date` in ISO 8601 format.
 | Recontact Risk | `low`, `medium`, `high` | Likelihood of user returning with same issue |
 
 **Conditional signals:**
-- `deflection_quality` is only present when `has_handoff=false` (bot-resolved conversations)
+- `deflection_quality` is only present when `has_handoff=false` (assistant-resolved conversations)
 - `handoff_reason` is only present when `has_handoff=true` (escalated conversations)
 - `resources` is only present when tool calls were used in the conversation
 - All other signals (sentiment, sentiment_shift, recontact_risk, user_intent, summary) are always present when scored
@@ -1085,7 +1085,7 @@ python3 scripts/fetch.py \
   --params min_messages=10 resources=irrelevant limit=50 \
   -o long_irrelevant.json
 
-# Conversations where bot created a follow-up action (ticket, email, etc.)
+# Conversations where the assistant created a follow-up action (ticket, email, etc.)
 python3 scripts/fetch.py \
   "/projects/$STUDIO_PROJECT_ID/conversations" \
   --params deflection_quality=actioned limit=100 \

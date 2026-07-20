@@ -1693,7 +1693,7 @@ The most common request — full detail in the [QA Practice Workflow](#qa-practi
 
 - **In-memory overrides no crean versión en el historial.** Es el punto clave: podés validar un cambio sin polutar el historial de versiones. Siempre validar con override antes de publicar versión.
 - **`dry_run` no ejecuta tools reales** (APIs externas, etc.). Si el asistente usa API tools, los resultados en dry_run son simulados — el eval puede pasar en dry_run y fallar en producción si la tool devuelve datos reales distintos.
-- **Los conversation IDs de producción son los más valiosos para evals.** Un eval construido sobre una conversación real donde el bot falló es el mejor regression test.
+- **Los conversation IDs de producción son los más valiosos para evals.** Un eval construido sobre una conversación real donde el agente falló es el mejor regression test.
 - **Assertion de "tone" es siempre subjetiva.** No poner assertions de tono en el grader automático — solo calidad objetiva: ¿respondió la pregunta correctamente?, ¿derivó cuando correspondía?
 
 ## Dependencias
