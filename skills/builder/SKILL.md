@@ -956,17 +956,36 @@ When the customer reports an outage, post a heads-up with {{ custom_tool: notify
 ### Managing tool configurations
 
 ```bash
-# List existing configs (reuse before creating duplicates)
+# List existing configs (each shows in_use + usages — reuse before creating duplicates)
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations"
 
-# Update the pinned params (short_name stays stable)
+# See a toolkit action's configurable schema (fields, required, metadata_sources)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-toolkits/INTERCOM_TICKETS/actions"
+
+# Effective per-attribute view of one pill + detected problems (required-but-empty, etc.)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID/schema"
+
+# Audit ALL pills — find the ones that will 400 at runtime (in-use first)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configuration-audit"
+
+# Where is each macro used? (short_name → playbook/skill)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-tool-usages"
+
+# Update the config (short_name stays stable). If the pill is in use in active/latest
+# instructions, an sbs_ token gets a 202 → the edit is queued for human approval.
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID" \
   -X PUT --body '{"config": {"params": {"channel": "C0999999999"}}}'
 
 # Delete a config (do this before the user can disconnect the toolkit —
-# a connection with live tool configurations cannot be disconnected)
+# a connection with live tool configurations cannot be disconnected). In-use pills
+# require approval (202) just like updates.
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID" -X DELETE
 ```
+
+**Auditing a broken ticket tool.** When "tickets aren't being created", run the audit — it cross-checks
+each pill against the toolkit's live metadata and flags required attributes left empty (e.g. an Intercom
+`Motivo` or conditional `Submotivo …`), which otherwise fail silently with `400 Missing required attributes`.
+`GET .../tool-configurations/{id}/schema` gives the same per-attribute detail for a single pill.
 
 ### Checklist before writing a toolkit macro
 
