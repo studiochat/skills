@@ -1,0 +1,253 @@
+# Toolkit Actions — the full catalog & how to wire them into instructions
+
+Toolkit actions let an assistant *do* things in a third-party system mid-conversation:
+create a support ticket, close the conversation, set attributes, post to Slack. This
+reference covers **every** toolkit action Studio Chat supports and how to make an
+assistant use it from its instructions.
+
+> The Slack walkthrough in `SKILL.md` (**Toolkit Actions**) is the worked example of the
+> connect → discover → configure → wire workflow. This file generalizes it to all toolkits
+> and adds the per-action detail. Endpoint specs live in
+> [`api-reference.md`](./api-reference.md#custom-toolkits--tool-configurations-pills).
+
+---
+
+## The mental model
+
+An action reaches an assistant through three layers:
+
+1. **Connection** — the customer connects the toolkit in the UI with *their own* credentials
+   (an Intercom access token, a Slack bot token / OAuth, a Zendesk subdomain+token, …).
+   **The builder never connects a toolkit** — you have no access to the customer's secrets.
+   Your job starts once it's connected.
+2. **Tool configuration (a "pill")** — a saved instance of *one action* with its parameters
+   decided: some **pinned** to a fixed value, some left for the **assistant** to fill, some
+   pulled from **conversation context**. Creating a pill returns a stable `short_name`
+   (`create_ticket_a1b2c`).
+3. **The macro** — `{{ custom_tool: short_name }}` placed in the instructions/skills at the
+   spot that describes *when* to do it. That's what actually exposes the action to the agent.
+
+A macro with no pill behind it is the #1 cause of "the assistant can't do X". Always
+create the pill first, then reference its exact `short_name`.
+
+---
+
+## How each parameter gets its value
+
+Every action has a list of configurable params (its `tool_params`). For each one you choose:
+
+| Mode | How | When |
+|---|---|---|
+| **Pinned** | put a literal in `config.params` | the value is fixed by the casuística (a channel, a ticket type, a motivo) |
+| **Assistant decides** | list it in `config.dynamic_schema` (or leave an LLM-fillable param un-pinned) | the value depends on the specific conversation (a ticket title, a submotivo) |
+| **From context** | pin a `{{deps.<path>}}` template in `config.params` | the value is in the conversation context (`{{deps.contact.email}}`) |
+
+**`llm_decideable: false` = pin-only.** Some params (Slack `channel`, Intercom
+`ticket_type_id`, a `state` filter, a `tag_name`) must never be guessed by the model — the
+`tool_params` entry flags them `llm_decideable: false`. You **must** pin these; the assistant
+is not offered them at runtime.
+
+**`metadata_source` = its valid values are fetched live.** A param like Slack `channel`
+(`metadata_source: "channels"`) or Intercom `ticket_type_id` (`metadata_source: "ticket_types"`)
+has its options fetched from the connected account via the metadata endpoint — you pick from
+real ids, never invent them.
+
+**`dynamic_children`** — a parent param (e.g. `ticket_type_id`) whose choice unlocks a second
+layer of configurable attributes (the ticket type's Motivo/Submotivo). Fetch them with the
+child `metadata_source` once the parent is chosen.
+
+**Conditional attributes.** A `dynamic_schema` attribute can depend on the value of a sibling
+list attribute — add `condition: {"parent_key": "<parent attr name>", "value": "<parent option
+name>"}`. The attribute then only applies when the parent equals that value (a *Submotivo Retiros
+Ecuador* applies only when *Motivo* is *"Retiros Ecuador"*). The service doesn't expose these
+dependencies — the configuration replicates them — so set the condition explicitly. It works whether
+the parent is pinned or assistant-decided; the pinned `"<id>:<label>"` value is matched by id or
+label. The deep dive below is the canonical example.
+
+---
+
+## The discovery & verification loop
+
+Run these (all accept the project `sbs_` token) instead of guessing:
+
+```bash
+# 1. Is the toolkit connected? (prerequisite — grab connected_account_id)
+GET /projects/{pid}/custom-toolkits/INTERCOM_TICKETS/status
+
+# 2. What actions does it expose + their configurable schema?
+GET /projects/{pid}/custom-toolkits/INTERCOM_TICKETS/actions
+
+# 3. Live options for a select/dynamic param
+GET /projects/{pid}/custom-toolkits/INTERCOM_TICKETS/metadata/ticket_types
+GET /projects/{pid}/custom-toolkits/INTERCOM_TICKETS/metadata/ticket_type_attributes?ticket_type_id=123
+
+# 4. After configuring — is this pill actually valid?
+GET /projects/{pid}/tool-configurations/{config_id}/schema     # per-attribute + issues[]
+GET /projects/{pid}/tool-configuration-audit                   # every misconfigured pill
+GET /projects/{pid}/custom-tool-usages                         # which macro is used where
+```
+
+A pill is **broken** when a required attribute is left empty — it fails *silently* at call
+time (e.g. Intercom returns `400 Missing required attributes`). The `schema` and
+`tool-configuration-audit` endpoints surface exactly these before they hit a customer.
+
+---
+
+## Catalog of supported toolkits & actions
+
+Slugs in **bold** are the `tool_slug` you pass to `POST /tool-configurations`.
+
+### Intercom Tickets — `INTERCOM_TICKETS` (api_key)
+Create and look up Intercom support tickets. Credentials: Intercom access token
+(scopes: read/write tickets; + read/write conversations to link a ticket to the chat;
++ read users to resolve an email).
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`INTERCOM_TICKETS_CREATE_TICKET`** | Creates a real ticket (irreversible). | `ticket_type_id` (pin-only, from `ticket_types`) · `contact_email` (usually `{{deps.contact.email}}`) · **plus the ticket type's own attributes** (Motivo/Submotivo…) — see the taxonomy section below · `title`/`description` are always LLM-written |
+| **`INTERCOM_TICKETS_GET_TICKET`** | Looks up one ticket by its Inbox number. | `ticket_id` · `contact_email` |
+| **`INTERCOM_TICKETS_FIND_TICKETS`** | Lists a user's tickets by email (surface what's open before creating). | `contact_email` · `state` (pin-only filter: open/closed/…/all) |
+
+**In instructions:** *"When the user reports a failed withdrawal in Ecuador, create a ticket
+with `{{ custom_tool: create_ticket_824ce }}`."* The pill pins the ticket type **and** the
+Motivo; the assistant supplies the title, description, and submotivo.
+
+### Intercom Conversations — `INTERCOM_CONVERSATIONS` (api_key)
+Act on the *current* Intercom conversation and its contact.
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`INTERCOM_CONVERSATIONS_FIND_DUPLICATES`** | Lists the user's open conversations — call it *before* creating a ticket/handoff to avoid duplicates. | `contact_email` · `state` (pin-only) |
+| **`INTERCOM_CONVERSATIONS_CLOSE_CONVERSATION`** | Closes the current conversation, optionally leaving an internal note first. | `closing_note` (optional; LLM or pinned) |
+| **`INTERCOM_CONVERSATIONS_SET_HIGH_PRIORITY`** | Flags the conversation high-priority via a tag + an Intercom Workflow. | `tag_name` (pin-only — the tag your Workflow listens on) |
+| **`INTERCOM_CONVERSATIONS_SET_ATTRIBUTES`** | Sets custom attributes on the conversation and/or the contact (user). | dynamic attributes (from `settable_attributes`); each carries an `attr_model` = `conversation` \| `contact`. Pin the ones that are fixed, let the assistant decide the rest |
+
+**In instructions:** *"Before answering, check for an open case with
+`{{ custom_tool: find_conversations_b1fc4 }}`; if the retiro is stuck, flag it with
+`{{ custom_tool: set_high_priority_xxxx }}` and set `issue_type` = 'withdrawal' via
+`{{ custom_tool: set_attrs_xxxx }}`."`
+
+> **SET_ATTRIBUTES pitfall:** a pill with **no attributes configured** is a no-op, and an
+> attribute name Intercom doesn't recognize is dropped silently. The `schema`/audit
+> endpoints flag both.
+
+### Slack — `SLACK` (bot token) · `SLACK_OAUTH` (one-click OAuth)
+Same action, two connection variants (the `tool_slug` differs).
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`SLACK_SEND_MESSAGE`** / **`SLACK_OAUTH_SEND_MESSAGE`** | Posts a message to a channel. | `channel` (pin-only, from `channels`) · `mentions` (pin-only, from `members`, **depends on** `channel`) · `message` (LLM-written or pinned) |
+
+Full worked example: see **Toolkit Actions** in `SKILL.md`. **In instructions:** *"When the
+customer reports an outage, post a heads-up with `{{ custom_tool: notify_oncall_a1b2c }}`."*
+
+### Zendesk — `ZENDESK` (api_key: subdomain + email + api_token)
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`ZENDESK_CLOSE_TICKET`** | Solves the current Zendesk ticket, optionally leaving an internal note first. | `closing_note` (optional) · required *solve fields* (from `required_solve_fields`) — some Zendesk instances force fields on solve; pin or let the assistant fill them |
+
+### Pylon — `PYLON` (api_key: api_token + user_id)
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`PYLON_CLOSE_ISSUE`** | Closes the current Pylon issue, optionally leaving an internal note first. | `closing_note` (optional) · `close_state` (pin-only — the target state) |
+
+### GU1 (KYB) — `GU1` (api_key)
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`GU1_GET_COMPANY`** | Reads a company's KYB status, risk score, and verification details (read-only). | `company_id` |
+
+---
+
+## Deep dive: Intercom ticket taxonomy (Motivo / Submotivo)
+
+This is where most misconfigurations live, so configure it deliberately.
+
+An Intercom ticket type (e.g. *Operaciones en Ecuador*) defines a required **`Motivo`** (a
+list attribute) and one **`Submotivo <X>`** per motivo, each **conditionally required** when
+`Motivo == X` (a "Submotivo Retiros Ecuador" is required only when Motivo is "Retiros
+Ecuador"). **Intercom's API does not expose the condition** — the configuration replicates it.
+
+**Design rule — pin the Motivo by casuística, let the assistant pick the Submotivo.**
+The motivo is usually determined by *where* the macro lives: a `retiros` skill always means
+"Retiros Ecuador", a compliance instruction always means "Cuenta bloqueada / … / compliance".
+Pinning it (instead of leaving it to the model) is deterministic and stops the assistant from
+choosing a wrong motivo. The **submotivo** is the genuine per-conversation decision → assistant.
+
+**Config shape for a pinned-motivo ticket pill:**
+
+```json
+{
+  "params": {
+    "ticket_type_id": "3050614:Operaciones en Ecuador.",
+    "contact_email": "{{deps.contact.email}}",
+    "Motivo": "c770c2b4-…-4f31f0:Retiros Ecuador",
+    "__preconfigured_types__": "<base64 of {\"Motivo\":\"list\"}>",
+    "__link_conversation__": "true",
+    "__share_with_customer__": "true"
+  },
+  "dynamic_schema": [
+    { "key": "Submotivo Retiros Ecuador", "name": "Submotivo Retiros Ecuador",
+      "type": "select", "data_type": "list",
+      "options": [ {"id": "…", "name": "Retiro Ecuador fallido"}, … ],
+      "condition": { "parent_key": "Motivo", "value": "Retiros Ecuador" } }
+  ]
+}
+```
+
+Notes:
+- **Pinned list values are stored `"<id>:<label>"`** (the label rides along for the UI; the
+  runtime sends the bare id). Get the id+label from
+  `metadata/ticket_type_attributes?ticket_type_id=<id>`.
+- **Mark the submotivo conditional on its motivo** with
+  `condition: {"parent_key": "<parent attribute name>", "value": "<parent option name>"}` —
+  the taxonomy stays explicit and self-documenting, and a later multi-motivo pill behaves
+  correctly. `parent_key` and `value` use the **names** (e.g. `"Motivo"` / `"Retiros
+  Ecuador"`), not ids. The runtime matches a **pinned `"<id>:<label>"`** parent by either its
+  id or its label, so a condition works whether the motivo is pinned or assistant-decided.
+- **Verify:** `GET /tool-configurations/{id}/schema` should show `Motivo: preconfigured`, the
+  matching `Submotivo: assistant_decides` (with its `condition`), the other submotivos
+  `not_applicable`, and **0 issues**. The audit is conditional-aware — it won't false-flag a
+  submotivo whose motivo can't occur.
+- **Not every type requires a motivo.** Some (e.g. a "Fraude" type) mark `Motivo` optional
+  (`required_to_create=false`); those pills are fine with just title/description. Trust the
+  metadata `required` flag over assumptions.
+
+---
+
+## Gotchas learned the hard way
+
+- **`<id>:<label>` everywhere.** `ticket_type_id`, Slack `channel`, and any pinned list
+  attribute are stored as `"<id>:<label>"`. The runtime resolves the id; you don't need to
+  strip it, but when you *read* a config, expect the label suffix.
+- **Required-but-empty fails silently.** A missing required attribute doesn't error at
+  save time — it 400s at *create* time, invisibly, for every conversation. Always run the
+  `schema`/audit check after configuring a ticket/attributes pill.
+- **In-use pills need approval to change.** Editing or deleting a pill whose macro appears in
+  the **active or latest** version of any playbook (instructions or skills) returns **202** —
+  queued for admin approval — for `sbs_` callers. *Creating* a pill, or editing one not yet
+  referenced anywhere, executes directly. Check `in_use` on the list/get response first.
+- **Metadata needs the connection.** The metadata endpoint reads the stored credentials; a
+  `missing_scope` hint means the customer's connection lacks a scope — tell them, you can't
+  fix it from here.
+- **Conversation-scoped actions use context.** SET_ATTRIBUTES, SET_HIGH_PRIORITY,
+  CLOSE_CONVERSATION, and ticket-linking act on the *current* conversation — `contact_email`
+  is typically `{{deps.contact.email}}`, and the conversation id comes from context, not a
+  param.
+
+---
+
+## The wiring pattern, end to end
+
+1. **Status** → confirm the toolkit `is_connected`; if not, ask the user to connect it and stop.
+2. **Actions + metadata** → learn the action's params and fetch live ids.
+3. **Create the pill** → `POST /tool-configurations` with the params pinned per the casuística
+   (pin the deterministic stuff, leave the per-conversation stuff to the assistant). Read the
+   `short_name`.
+4. **Verify** → `GET /tool-configurations/{id}/schema` shows 0 issues.
+5. **Wire the macro** → put `{{ custom_tool: <short_name> }}` in the instruction/skill exactly
+   where the situation is described; if the assistant writes any text (a ticket title, a Slack
+   message), say there how it should read. Confirm with the user, then re-read to check the
+   `short_name` is spelled exactly.

@@ -1688,3 +1688,15 @@ The most common request — full detail in the [QA Practice Workflow](#qa-practi
 7. **Reproduce + iterate**: `qa.py chat --instructions ... --tool-mocks-file ...` until the bad behaviour is gone — in-memory overrides ONLY, never by saving a version. Read the full response (events, tool calls, citations, explanation), not just the assistant message.
 8. **Human applies the new version** — deliver the final content, wait for confirmation + the new version ID
 9. **Eval coverage**: persist case(s) sized to the fix, run only them against the new version, then offer a full-suite run to catch regressions.
+
+## Gotchas adicionales
+
+- **In-memory overrides no crean versión en el historial.** Es el punto clave: podés validar un cambio sin polutar el historial de versiones. Siempre validar con override antes de publicar versión.
+- **`dry_run` no ejecuta tools reales** (APIs externas, etc.). Si el asistente usa API tools, los resultados en dry_run son simulados — el eval puede pasar en dry_run y fallar en producción si la tool devuelve datos reales distintos.
+- **Los conversation IDs de producción son los más valiosos para evals.** Un eval construido sobre una conversación real donde el agente falló es el mejor regression test.
+- **Assertion de "tone" es siempre subjetiva.** No poner assertions de tono en el grader automático — solo calidad objetiva: ¿respondió la pregunta correctamente?, ¿derivó cuando correspondía?
+
+## Dependencias
+
+- `customer-success:builder` — para aplicar los fixes validados.
+- `customer-success:continuous-improvement` — el loop proactivo que usa quality-engineer como herramienta de validación.

@@ -348,164 +348,64 @@ All fields optional — same shape as create.
 
 ## Custom Toolkits & Tool Configurations (Pills)
 
-Toolkit actions (Intercom Tickets, Slack, Zendesk, Pylon, …) are wired into instructions/skills
-as **pills**: `{{ custom_tool: short_name }}`. Each pill points at a **tool configuration** — a saved
-setup of one action (e.g. one Intercom ticket type) where each attribute is either *pre-configured*
-(a fixed value), left for the *assistant to decide* at runtime, or *empty*. A required attribute left
-empty silently fails at call time (e.g. Intercom returns `400 Missing required attributes`). These
-endpoints let you **discover, audit, and edit** those configs by API.
-
-All accept the project API token (`X-API-Key: sbs_…`).
+Toolkit actions (Intercom Tickets/Conversations, Slack, Zendesk, Pylon, GU1) are wired into
+instructions as **pills**: `{{ custom_tool: short_name }}`, each backed by a **tool
+configuration** (one action with its params pinned / assistant-decided / context-driven). See
+[`toolkit-actions.md`](./toolkit-actions.md) for the conceptual guide + full action catalog.
+All of these accept the project (`sbs_`) token.
 
 ### List connected toolkits
-`GET /projects/{pid}/custom-toolkits` → every registered toolkit with connection status
-(`is_connected`, `connected_account_id`).
+`GET /projects/{pid}/custom-toolkits` — every toolkit with `is_connected`, `connected_account_id`.
 
-### Is a specific toolkit connected? (prerequisite to use its actions)
+### Toolkit connection status (one toolkit)
 `GET /projects/{pid}/custom-toolkits/{toolkit_slug}/status`
+Returns `{toolkit_slug, name, auth_type, is_connected, connected_account_id, tools}`. A toolkit's
+actions can only be configured/called once `is_connected` is true; pass `connected_account_id`
+as `toolkit_connection_id` when creating a config.
 
-A toolkit's actions can only be configured/called once it is **connected**. Check first:
-
-```json
-{"toolkit_slug": "INTERCOM_TICKETS", "name": "Intercom Tickets", "auth_type": "api_key",
- "is_connected": true, "connected_account_id": "conn-abc123",
- "tools": ["INTERCOM_TICKETS_CREATE_TICKET", "INTERCOM_TICKETS_GET_TICKET", "INTERCOM_TICKETS_FIND_TICKETS"]}
-```
-
-If `is_connected` is `false`, **ask the user to connect the toolkit** (it needs credentials/OAuth) and
-stop — you cannot create a tool configuration without `connected_account_id`. Use it as the
-`toolkit_connection_id` when creating a config.
-
-### List a toolkit's actions and their configurable schema
+### A toolkit's actions + configurable schema
 `GET /projects/{pid}/custom-toolkits/{toolkit_slug}/actions`
+Returns `{toolkit_slug, is_connected, connected_account_id, actions: [{tool_slug, params[], metadata_sources[]}]}`.
+Each param carries `key, label, type, required, llm_decideable, metadata_source, dynamic_children, options`.
 
-Returns the connection status plus each action (`tool_slug`) with the fields you can configure:
-
-```json
-{
-  "toolkit_slug": "INTERCOM_TICKETS",
-  "is_connected": true,
-  "connected_account_id": "conn-abc123",
-  "actions": [
-    {
-      "tool_slug": "INTERCOM_TICKETS_CREATE_TICKET",
-      "params": [
-        {"key": "ticket_type_id", "label": "Ticket Type", "type": "select", "required": true,
-         "llm_decideable": false, "metadata_source": "ticket_types",
-         "dynamic_children": {"metadata_source": "ticket_type_attributes", "parent_key_param": "ticket_type_id"}},
-        {"key": "contact_email", "label": "Contact Email", "type": "text", "required": true}
-      ],
-      "metadata_sources": ["ticket_types", "ticket_type_attributes"]
-    }
-  ]
-}
-```
-
-### Fetch dynamic options (attributes, types, values)
+### Dynamic metadata (options for select/dynamic params)
 `GET /projects/{pid}/custom-toolkits/{toolkit_slug}/metadata/{metadata_type}`
+`metadata_type` comes from the action's `metadata_sources`. Examples: Slack `channels`,
+`members?channel=<id>`; Intercom `ticket_types`, `ticket_type_attributes?ticket_type_id=<id>`,
+`settable_attributes`. Reads the stored credentials — needs the toolkit connected.
 
-`metadata_type` comes from `metadata_sources` above. For Intercom Tickets:
-- `ticket_types` → available ticket types (feeds `ticket_type_id`).
-- `ticket_type_attributes?ticket_type_id=…` → every attribute of a type with `data_type`, `options`,
-  `required` (`required_to_create`), and visibility flags. This is how you learn the valid Motivo /
-  Submotivo values and which are required.
-
-### List tool configurations (pills) — with usage
+### List tool configurations (pills)
 `GET /projects/{pid}/tool-configurations`
+Each entry adds `in_use` (bool) + `usages` (`[{playbook_base_id, playbook_name, location, version}]`).
+`location` is `"instructions"` or `"skill:<name>"`.
 
-Each entry adds `in_use` + `usages` (where the `{{ custom_tool: short_name }}` macro appears):
+### Get / create / update / delete a pill
+- `GET /projects/{pid}/tool-configurations/{config_id}` — with `in_use`/`usages`.
+- `POST /projects/{pid}/tool-configurations` — body: `{tool_slug, toolkit_connection_id, display_name, config}`.
+  `config` = `{params: {...}, dynamic_schema: [...]}`. Returns the generated `short_name`. Creating is direct (no approval).
+- `PUT /projects/{pid}/tool-configurations/{config_id}` — body `{config}`. **In-use → 202 approval.**
+- `DELETE /projects/{pid}/tool-configurations/{config_id}` — **in-use → 202 approval.**
 
-```json
-{
-  "id": "…", "short_name": "create_ticket_824ce", "display_name": "Create Ticket",
-  "tool_slug": "INTERCOM_TICKETS_CREATE_TICKET", "toolkit_connection_id": "…", "toolkit_slug": "INTERCOM_TICKETS",
-  "config": {"params": {"ticket_type_id": "…"}, "dynamic_schema": [{"key": "Motivo", "type": "select", "options": [...]}]},
-  "in_use": true,
-  "usages": [{"playbook_base_id": "…", "playbook_name": "Joaquina", "location": "skill:retiros", "version": "active+latest"}]
-}
-```
+> **Approval gating:** editing/deleting a pill referenced in the **active or latest** version of
+> any playbook (instructions or skills) is queued for human approval (`202` + `approval_id`) for
+> `sbs_` callers. Pills not yet referenced anywhere are updated/deleted directly. Check `in_use` first.
 
-`config.params` = pre-configured/fixed values (also holds `ticket_type_id`, `contact_email`, and meta
-keys like `__link_conversation__`). `config.dynamic_schema` = the attributes the assistant decides
-(each `{key, label, type, data_type, options, condition, …}`).
-
-### Get one tool configuration
-`GET /projects/{pid}/tool-configurations/{config_id}` → same shape, with `in_use`/`usages`.
-
-### Effective schema for a config (per-attribute + problems)
+### Effective schema of a pill (per-attribute + problems)
 `GET /projects/{pid}/tool-configurations/{config_id}/schema`
+Merges the config with live service metadata: each attribute's `mode`
+(`preconfigured` | `assistant_decides` | `empty` | `not_applicable`), `required`, `value`, `options`,
+`condition`, plus detected `issues[]` and `metadata_available`.
 
-Merges the stored config with **live service metadata** so you see each attribute's `mode`
-(`assistant_decides` | `preconfigured` | `empty`), whether the service `required`s it, its `options`,
-any `condition`, plus a list of detected `issues`:
-
-```json
-{
-  "id": "…", "short_name": "create_ticket_824ce", "tool_slug": "INTERCOM_TICKETS_CREATE_TICKET",
-  "toolkit_slug": "INTERCOM_TICKETS",
-  "attributes": [
-    {"key": "Motivo", "label": "Motivo", "type": "list", "required": true, "mode": "empty",
-     "value": null, "options": [...], "condition": null,
-     "problem": "Required attribute 'Motivo' is left empty — Intercom will reject every create."}
-  ],
-  "issues": ["Required attribute 'Motivo' is left empty — …"],
-  "metadata_available": true
-}
-```
-
-### Audit every config in the project
+### Audit every pill in the project
 `GET /projects/{pid}/tool-configuration-audit`
+Returns `{total_configs, misconfigured: [{id, short_name, display_name, tool_slug, toolkit_slug, in_use, issues[]}], skipped}`.
+Surfaces required-but-empty attributes (a silent `400` at call time), in-use first. The Intercom
+audit is conditional-aware (a `Submotivo X` is only required when the Motivo can be `X`).
 
-Scans all pills and returns the misconfigured ones (in-use first) — the fastest way to find pills that
-will 400 at runtime:
-
-```json
-{"total_configs": 38,
- "misconfigured": [
-   {"id": "…", "short_name": "create_ticket_824ce", "display_name": "Create Ticket",
-    "tool_slug": "INTERCOM_TICKETS_CREATE_TICKET", "toolkit_slug": "INTERCOM_TICKETS", "in_use": true,
-    "issues": ["Required attribute 'Motivo' is left empty — …"]}],
- "skipped": []}
-```
-
-`skipped` lists config IDs whose toolkit isn't connected or whose live metadata couldn't be fetched.
-
-### Map macros → configs (where each pill is used)
-`GET /projects/{pid}/custom-tool-usages` → `{short_name: [{playbook_base_id, playbook_name, location, version}]}`
-across the **active and latest** version of every playbook (instructions + skills). Use it to tie a pill
-like `create_ticket_824ce` back to the skill/casuística that references it.
-
-### Create a tool configuration (pill)
-`POST /projects/{pid}/tool-configurations`
-
-```json
-{
-  "toolkit_connection_id": "string (required) — from the connected toolkit",
-  "tool_slug": "INTERCOM_TICKETS_CREATE_TICKET",
-  "display_name": "Create Ticket — Retiros Ecuador",
-  "config": {
-    "params": {"ticket_type_id": "…", "contact_email": "{{ deps.email }}"},
-    "dynamic_schema": [
-      {"key": "Motivo", "type": "select", "data_type": "list", "options": [{"id": "…", "name": "…"}]},
-      {"key": "Submotivo Retiros Ecuador", "type": "select", "data_type": "list",
-       "condition": {"parent_key": "Motivo", "value": "Retiros"}, "options": [...]}
-    ]
-  }
-}
-```
-
-Returns the config with its generated `short_name` (`{slug(display_name)}_{last5(config_id)}`). Creating a
-pill has **no effect** until its macro is added to instructions, so this executes directly.
-
-### Update / Delete a tool configuration
-`PUT /projects/{pid}/tool-configurations/{config_id}` (body: `{"config": {…}}`) ·
-`DELETE /projects/{pid}/tool-configurations/{config_id}`
-
-> **Approval gating:** if the pill is referenced in the **active or latest** version of any playbook
-> (instructions or skills), an edit/delete via a project (`sbs_`) token reaches live behavior and is
-> **queued for human approval** — the call returns **202** with `{approval_id, status: "pending"}`. Pills
-> not yet wired into any instruction are updated/deleted directly. Check `in_use` first (list/get) to know
-> which path you'll hit.
+### Macro → usage map
+`GET /projects/{pid}/custom-tool-usages`
+`{short_name: [{playbook_base_id, playbook_name, location, version}]}` across the active + latest
+version of every playbook (instructions + skills). Ties a pill back to the skill/casuística using it.
 
 ---
 

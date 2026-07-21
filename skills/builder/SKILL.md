@@ -2,7 +2,7 @@
 name: builder
 description: >
   Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
-  API tools, toolkit actions (Slack), alerts, schedules, and trending topics. Use when asked
+  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon), alerts, schedules, and trending topics. Use when asked
   to create, update, or manage any aspect of an assistant's configuration, including wiring up the
   template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
 ---
@@ -246,7 +246,7 @@ python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/playbooks"
 python3 scripts/api.py \
   "/projects/$STUDIO_PROJECT_ID/playbooks" \
   -X POST --body '{
-    "name": "Support Bot",
+    "name": "Support Assistant",
     "content": "You are a helpful support assistant.\n\nRules:\n- Be concise and friendly\n- Escalate billing disputes",
     "kb_ids": ["KB_ID_1", "KB_ID_2"]
   }'
@@ -834,11 +834,21 @@ Then wire it into an assistant with `{{ tool(TOOL_ID) }}` (see [Template macros]
 
 ---
 
-## Toolkit Actions (Slack)
+## Toolkit Actions
 
-Some actions — *send a Slack message* — come from **built-in toolkits** that wrap a third-party API. Unlike a KB or an API tool (which the builder creates outright), a toolkit must be **connected by the user** with their own credentials before its actions can be used.
+Some actions — *send a Slack message*, *create an Intercom ticket*, *set attributes*, *close the
+conversation* — come from **built-in toolkits** that wrap a third-party API. Unlike a KB or an API
+tool (which the builder creates outright), a toolkit must be **connected by the user** with their own
+credentials before its actions can be used.
 
-**The builder never connects a toolkit.** Connecting requires the customer's secret (a Slack bot token) or an interactive OAuth flow — that's the user's job, in the UI. The builder's role is to **discover** what's connected and wire the available actions into instructions/skills. If an action you need belongs to a toolkit that isn't connected, **stop and ask the user to connect it first** — don't write the macro and hope.
+> **Full catalog of every toolkit action** — Intercom Tickets/Conversations, Slack, Zendesk, Pylon,
+> GU1 — and how to configure each and wire it into instructions is in
+> [`references/toolkit-actions.md`](./references/toolkit-actions.md). It also covers the Intercom
+> ticket **Motivo/Submotivo taxonomy** (the most error-prone part) and the audit endpoints that catch
+> a silently-broken pill. The Slack walkthrough below is the worked example of the shared
+> connect → discover → configure → wire workflow; **every** toolkit follows the same shape.
+
+**The builder never connects a toolkit.** Connecting requires the customer's secret (a Slack bot token, an Intercom token) or an interactive OAuth flow — that's the user's job, in the UI. The builder's role is to **discover** what's connected and wire the available actions into instructions/skills. If an action you need belongs to a toolkit that isn't connected, **stop and ask the user to connect it first** — don't write the macro and hope.
 
 **Slack has two connection variants — same action, different slug:**
 
@@ -849,7 +859,9 @@ Some actions — *send a Slack message* — come from **built-in toolkits** that
 
 Both expose the same `SLACK_SEND_MESSAGE` action with the same params — only the registry slug differs. In Step 1 check which one is `is_connected: true` and use **that** slug in the metadata paths below. A project typically has one or the other, not both.
 
-> Other toolkits exist in the registry (Intercom, etc.) and follow the same connect → discover → configure pattern, but this section covers **Slack messages** only — the rest will be documented separately.
+> The other toolkits (Intercom Tickets/Conversations, Zendesk, Pylon, GU1) follow the same
+> connect → discover → configure pattern — each action, its params, and how to wire it into
+> instructions is documented in [`references/toolkit-actions.md`](./references/toolkit-actions.md).
 
 ### The workflow (run this whenever the user asks for "send a Slack message")
 
@@ -1136,7 +1148,7 @@ a structured filter, evaluated on a cron schedule. When the count crosses the th
 monitor fires and ships a notification to Slack and/or email.
 
 Use **monitors** when the question is "how many?" (e.g. _more than 50 handoffs in the last
-hour_). Use **alerts** when the question is "is the bot misbehaving?" — alerts run a
+hour_). Use **alerts** when the question is "is the assistant misbehaving?" — alerts run a
 natural-language check via the data-expert skill, monitors don't read messages at all.
 
 Like alerts, the cron has a **10-minute minimum interval**.
@@ -1417,3 +1429,16 @@ python3 scripts/api.py \
 - **Skills versioning**: Skill changes (add/edit/delete) also create new playbook versions. Use the dedicated skill endpoints for individual operations.
 - **base_id vs playbook_id**: Active version endpoints use `base_id` (stable across versions). Other endpoints use `playbook_id` (specific version). Skill endpoints use `base_id`.
 - **Soft deletes**: Delete operations are soft — use restore to undo.
+
+## Gotchas
+
+- **Con sandbox key (`sbs_`), las writes son 202 pending — siempre adjuntar descripción al approval.** El reviewe solo ve el description que adjuntás, no el payload raw. Si no describís, el approval queda sin contexto.
+- **`playbook_base_id` para gestión de versiones, `playbook_id` para una versión específica.** Confundirlos lleva a crear versiones duplicadas.
+- **Nunca eliminar KBs sin confirmar que no están linkeadas a otros asistentes.** Una KB puede estar compartida entre varios playbooks del mismo proyecto.
+- **Los `pills` (template macros) deben existir como objetos en la API antes de referenciarlos en instrucciones.** Si el pill `{{nombre_cliente}}` no existe como template variable registrada, la instrucción lo trata como texto literal.
+- **Trending topics se generan en background — no son instantáneos.** Después de habilitarlos, hay un delay de procesamiento. No asumir que están disponibles inmediatamente.
+- **El campo `content` de las instrucciones tiene límite de tokens.** Si las instrucciones son muy largas, el asistente puede truncar en producción. Preferir casuísticas para comportamientos específicos.
+
+## Dependencias
+
+Este skill es la base que usan `customer-success:continuous-improvement` y `customer-success:quality-engineer` para modificar asistentes.

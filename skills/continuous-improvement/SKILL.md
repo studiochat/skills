@@ -313,7 +313,7 @@ casuística should carry an `{{ examples: ... }}` block, not a described tone.
 
 ---
 
-## Worked example — "no quiero que el bot prometa reembolsos fuera de política"
+## Worked example — "no quiero que el agente prometa reembolsos fuera de política"
 
 1. **Clarify** — desired: when an order is outside the 30-day window, the assistant explains the
    policy and escalates instead of promising a refund. Edge case: what if the user is a VIP?
@@ -345,3 +345,16 @@ This skill orchestrates three others — reach for them rather than re-deriving:
 - **[data-expert](../data-expert/SKILL.md)** — ground the policy in real conversations / trends (entry point B, Step 1).
 - **[builder](../builder/SKILL.md)** — the mechanics of every layer: editing instructions, skill CRUD, KBs, example blocks, tools, and the macro/tagging rules. Also where the change is pushed (Step 5).
 - **[quality-engineer](../quality-engineer/SKILL.md)** — in-memory overrides + mocks to validate (Step 4) and eval cases to cover (Step 6). It's also the *reactive* sibling: if the change is driven by a specific bad conversation rather than a policy, start there instead.
+
+## Gotchas
+
+- **"Casuística" y "skill" son lo mismo en Studio Chat.** El término interno del API es `skill`, el término que usan los usuarios es "casuística". No confundir con los skills de Claude Code.
+- **Las instrucciones base se inyectan en CADA conversación — son caras.** Si el comportamiento aplica solo a un escenario, va en una casuística, no en las instrucciones base. Instrucciones base solo para reglas universales.
+- **Validar con in-memory override ANTES de publicar versión.** Crear una versión nueva crea historial que no se puede borrar fácilmente. Siempre validar con `dry_run`/override primero.
+- **Con sandbox key (`sbs_`), los writes son 202 pending.** Siempre buscar el `approval_id` en la respuesta y adjuntar descripción al approval inmediatamente.
+- **`playbook_base_id` ≠ `playbook_id`.** El `base_id` es estable a través de versiones. Usar `base_id` para gestión de skills/casuísticas, y `playbook_id` solo cuando necesitás una versión específica.
+
+## Dependencias
+
+- `customer-success:builder` — mecánica de CRUD de instrucciones, casuísticas, KB y examples.
+- `customer-success:quality-engineer` — validación con in-memory overrides y evals de regresión.
