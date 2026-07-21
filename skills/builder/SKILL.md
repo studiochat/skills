@@ -985,9 +985,16 @@ python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID" -X DELETE
 ```
 
-**Auditing a broken ticket tool.** When "tickets aren't being created", run the audit — it cross-checks
-each pill against the toolkit's live metadata and flags required attributes left empty (e.g. an Intercom
-`Motivo` or conditional `Submotivo …`), which otherwise fail silently with `400 Missing required attributes`.
+**Auditing a broken pill.** When an action "isn't doing anything", run the audit — it cross-checks each
+pill against its toolkit's live metadata and understands each toolkit's semantics:
+
+- **Intercom Tickets** — required attributes left empty (e.g. `Motivo`, or a conditional `Submotivo …`),
+  which otherwise fail silently with `400 Missing required attributes`.
+- **Slack** (bot token *and* OAuth) — a pin-only `channel` left empty, or a pinned channel the bot can't
+  access / that was renamed or archived.
+- **Intercom Conversations · Set Attributes** — a tool with no attributes configured (a no-op), or an
+  attribute name Intercom doesn't recognize (the write is silently dropped).
+
 `GET .../tool-configurations/{id}/schema` gives the same per-attribute detail for a single pill.
 
 ### Checklist before writing a toolkit macro
