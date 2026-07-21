@@ -2,7 +2,7 @@
 name: builder
 description: >
   Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
-  API tools, toolkit actions (Slack), alerts, schedules, and trending topics. Use when asked
+  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon), alerts, schedules, and trending topics. Use when asked
   to create, update, or manage any aspect of an assistant's configuration, including wiring up the
   template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
 ---
@@ -834,11 +834,21 @@ Then wire it into an assistant with `{{ tool(TOOL_ID) }}` (see [Template macros]
 
 ---
 
-## Toolkit Actions (Slack)
+## Toolkit Actions
 
-Some actions — *send a Slack message* — come from **built-in toolkits** that wrap a third-party API. Unlike a KB or an API tool (which the builder creates outright), a toolkit must be **connected by the user** with their own credentials before its actions can be used.
+Some actions — *send a Slack message*, *create an Intercom ticket*, *set attributes*, *close the
+conversation* — come from **built-in toolkits** that wrap a third-party API. Unlike a KB or an API
+tool (which the builder creates outright), a toolkit must be **connected by the user** with their own
+credentials before its actions can be used.
 
-**The builder never connects a toolkit.** Connecting requires the customer's secret (a Slack bot token) or an interactive OAuth flow — that's the user's job, in the UI. The builder's role is to **discover** what's connected and wire the available actions into instructions/skills. If an action you need belongs to a toolkit that isn't connected, **stop and ask the user to connect it first** — don't write the macro and hope.
+> **Full catalog of every toolkit action** — Intercom Tickets/Conversations, Slack, Zendesk, Pylon,
+> GU1 — and how to configure each and wire it into instructions is in
+> [`references/toolkit-actions.md`](./references/toolkit-actions.md). It also covers the Intercom
+> ticket **Motivo/Submotivo taxonomy** (the most error-prone part) and the audit endpoints that catch
+> a silently-broken pill. The Slack walkthrough below is the worked example of the shared
+> connect → discover → configure → wire workflow; **every** toolkit follows the same shape.
+
+**The builder never connects a toolkit.** Connecting requires the customer's secret (a Slack bot token, an Intercom token) or an interactive OAuth flow — that's the user's job, in the UI. The builder's role is to **discover** what's connected and wire the available actions into instructions/skills. If an action you need belongs to a toolkit that isn't connected, **stop and ask the user to connect it first** — don't write the macro and hope.
 
 **Slack has two connection variants — same action, different slug:**
 
@@ -849,7 +859,9 @@ Some actions — *send a Slack message* — come from **built-in toolkits** that
 
 Both expose the same `SLACK_SEND_MESSAGE` action with the same params — only the registry slug differs. In Step 1 check which one is `is_connected: true` and use **that** slug in the metadata paths below. A project typically has one or the other, not both.
 
-> Other toolkits exist in the registry (Intercom, etc.) and follow the same connect → discover → configure pattern, but this section covers **Slack messages** only — the rest will be documented separately.
+> The other toolkits (Intercom Tickets/Conversations, Zendesk, Pylon, GU1) follow the same
+> connect → discover → configure pattern — each action, its params, and how to wire it into
+> instructions is documented in [`references/toolkit-actions.md`](./references/toolkit-actions.md).
 
 ### The workflow (run this whenever the user asks for "send a Slack message")
 
