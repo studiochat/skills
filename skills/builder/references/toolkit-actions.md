@@ -56,6 +56,14 @@ real ids, never invent them.
 layer of configurable attributes (the ticket type's Motivo/Submotivo). Fetch them with the
 child `metadata_source` once the parent is chosen.
 
+**Conditional attributes.** A `dynamic_schema` attribute can depend on the value of a sibling
+list attribute — add `condition: {"parent_key": "<parent attr name>", "value": "<parent option
+name>"}`. The attribute then only applies when the parent equals that value (a *Submotivo Retiros
+Ecuador* applies only when *Motivo* is *"Retiros Ecuador"*). The service doesn't expose these
+dependencies — the configuration replicates them — so set the condition explicitly. It works whether
+the parent is pinned or assistant-decided; the pinned `"<id>:<label>"` value is matched by id or
+label. The deep dive below is the canonical example.
+
 ---
 
 ## The discovery & verification loop
@@ -183,7 +191,8 @@ choosing a wrong motivo. The **submotivo** is the genuine per-conversation decis
   "dynamic_schema": [
     { "key": "Submotivo Retiros Ecuador", "name": "Submotivo Retiros Ecuador",
       "type": "select", "data_type": "list",
-      "options": [ {"id": "…", "name": "Retiro Ecuador fallido"}, … ] }
+      "options": [ {"id": "…", "name": "Retiro Ecuador fallido"}, … ],
+      "condition": { "parent_key": "Motivo", "value": "Retiros Ecuador" } }
   ]
 }
 ```
@@ -192,14 +201,16 @@ Notes:
 - **Pinned list values are stored `"<id>:<label>"`** (the label rides along for the UI; the
   runtime sends the bare id). Get the id+label from
   `metadata/ticket_type_attributes?ticket_type_id=<id>`.
-- The submotivo needs **no `condition`** here — with the motivo fixed, it always applies.
-  (If instead you leave the *Motivo* to the assistant, give each submotivo a
-  `condition: {"parent_key": "Motivo", "value": "<motivo name>"}` so it's only required for
-  its motivo.)
+- **Mark the submotivo conditional on its motivo** with
+  `condition: {"parent_key": "<parent attribute name>", "value": "<parent option name>"}` —
+  the taxonomy stays explicit and self-documenting, and a later multi-motivo pill behaves
+  correctly. `parent_key` and `value` use the **names** (e.g. `"Motivo"` / `"Retiros
+  Ecuador"`), not ids. The runtime matches a **pinned `"<id>:<label>"`** parent by either its
+  id or its label, so a condition works whether the motivo is pinned or assistant-decided.
 - **Verify:** `GET /tool-configurations/{id}/schema` should show `Motivo: preconfigured`, the
-  matching `Submotivo: assistant_decides`, the other submotivos `not_applicable`, and **0
-  issues**. The audit is conditional-aware — it won't false-flag a submotivo whose motivo
-  can't occur.
+  matching `Submotivo: assistant_decides` (with its `condition`), the other submotivos
+  `not_applicable`, and **0 issues**. The audit is conditional-aware — it won't false-flag a
+  submotivo whose motivo can't occur.
 - **Not every type requires a motivo.** Some (e.g. a "Fraude" type) mark `Motivo` optional
   (`required_to_create=false`); those pills are fine with just title/description. Trust the
   metadata `required` flag over assumptions.
