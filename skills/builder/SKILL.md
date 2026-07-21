@@ -968,17 +968,46 @@ When the customer reports an outage, post a heads-up with {{ custom_tool: notify
 ### Managing tool configurations
 
 ```bash
-# List existing configs (reuse before creating duplicates)
+# List existing configs (each shows in_use + usages — reuse before creating duplicates)
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations"
 
-# Update the pinned params (short_name stays stable)
+# Is the toolkit connected? (must be true before its actions can be used)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-toolkits/INTERCOM_TICKETS/status"
+
+# See a toolkit action's configurable schema (fields, required, metadata_sources) + is_connected
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-toolkits/INTERCOM_TICKETS/actions"
+
+# Effective per-attribute view of one pill + detected problems (required-but-empty, etc.)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID/schema"
+
+# Audit ALL pills — find the ones that will 400 at runtime (in-use first)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configuration-audit"
+
+# Where is each macro used? (short_name → playbook/skill)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/custom-tool-usages"
+
+# Update the config (short_name stays stable). If the pill is in use in active/latest
+# instructions, an sbs_ token gets a 202 → the edit is queued for human approval.
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID" \
   -X PUT --body '{"config": {"params": {"channel": "C0999999999"}}}'
 
 # Delete a config (do this before the user can disconnect the toolkit —
-# a connection with live tool configurations cannot be disconnected)
+# a connection with live tool configurations cannot be disconnected). In-use pills
+# require approval (202) just like updates.
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/tool-configurations/CONFIG_ID" -X DELETE
 ```
+
+**Auditing a broken pill.** When an action "isn't doing anything", run the audit — it cross-checks each
+pill against its toolkit's live metadata and understands each toolkit's semantics:
+
+- **Intercom Tickets** — required attributes left empty (e.g. `Motivo`, or a conditional `Submotivo …`),
+  which otherwise fail silently with `400 Missing required attributes`.
+- **Slack** (bot token *and* OAuth) — a pin-only `channel` left empty, or a pinned channel the bot can't
+  access / that was renamed or archived.
+- **Intercom Conversations · Set Attributes** — a tool with no attributes configured (a no-op), or an
+  attribute name Intercom doesn't recognize (the write is silently dropped).
+
+`GET .../tool-configurations/{id}/schema` gives the same per-attribute detail for a single pill.
 
 ### Checklist before writing a toolkit macro
 
