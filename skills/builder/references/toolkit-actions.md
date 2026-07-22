@@ -2,7 +2,8 @@
 
 Toolkit actions let an assistant *do* things in a third-party system mid-conversation:
 create a support ticket, close the conversation, set attributes, post to Slack, add an entry
-to a Notion database, append or look up a row in a Google Sheet. This reference covers
+to a Notion database, append or look up a row in a Google Sheet, check availability and
+book a meeting on Cal.com. This reference covers
 **every** toolkit action Studio Chat supports and how to make an assistant use it from its
 instructions.
 
@@ -175,6 +176,40 @@ customer reports an outage, post a heads-up with `{{ custom_tool: notify_oncall_
 | Action | What it does | Key params |
 |---|---|---|
 | **`GU1_GET_COMPANY`** | Reads a company's KYB status, risk score, and verification details (read-only). | `company_id` |
+
+### Cal.com — `CAL_COM` (api_key)
+Check availability and book meetings on the customer's Cal.com calendar. Credentials: a
+Cal.com API key (`cal_…`, from Settings → Developer → API keys).
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`CAL_COM_GET_AVAILABILITY`** | Lists available slots for an event type (read-only). Slots come back grouped by date, in the resolved time zone. | `event_type_id` (pin-only, from `event_types`) · `timezone` (optional — pin an IANA zone, use context, or leave to the assistant; defaults to the calendar owner's) · the assistant provides the ISO date range at runtime |
+| **`CAL_COM_BOOK_MEETING`** | Books a real meeting (irreversible — sends calendar invites). | `event_type_id` (pin-only) · `attendee_email` (usually `{{deps.contact.email}}`) · `attendee_name` (pin or assistant) · `timezone` (optional) · `language` (optional pin, 2-letter code for the booking emails) · the assistant provides `start` (a slot from availability, verbatim) and optional `notes` |
+
+**Discovery:** `GET .../custom-toolkits/CAL_COM/metadata/event_types` → `[{id, name}]` (name
+includes the duration, e.g. `"Demo (30 min)"`).
+
+**Config shape:**
+
+```json
+// GET_AVAILABILITY + BOOK_MEETING pills typically pin the same event type
+{
+  "params": {
+    "event_type_id": "123:Demo (30 min)",
+    "attendee_email": "{{deps.contact.email}}",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "language": "es"
+  }
+}
+```
+
+Notes:
+- **Always wire BOTH pills together**: availability first, then booking. The booking `start`
+  must be a slot the availability action returned — the runtime converts it to UTC and the
+  tool description forbids invented times.
+- Same-slot booking retries are deduped; a different slot or attendee books normally.
+- In instructions: *"To schedule a demo, check slots with `{{ custom_tool: check_avail_a1b2c }}`,
+  offer them, and once the user confirms one, book it with `{{ custom_tool: book_demo_c3d4e }}`."*
 
 ### Notion Databases — `NOTION_DATABASES` (api_key)
 Add entries (pages) to **existing** Notion databases — it never creates databases. Credentials:
