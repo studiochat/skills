@@ -2,7 +2,7 @@
 name: builder
 description: >
   Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
-  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets), alerts, schedules, and trending topics. Use when asked
+  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets, Cal.com), alerts, schedules, and trending topics. Use when asked
   to create, update, or manage any aspect of an assistant's configuration, including wiring up the
   template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
 ---
@@ -842,7 +842,7 @@ tool (which the builder creates outright), a toolkit must be **connected by the 
 credentials before its actions can be used.
 
 > **Full catalog of every toolkit action** — Intercom Tickets/Conversations, Slack, Zendesk, Pylon,
-> GU1, Notion Databases, Google Sheets — and how to configure each and wire it into instructions is in
+> GU1, Notion Databases, Google Sheets, Cal.com — and how to configure each and wire it into instructions is in
 > [`references/toolkit-actions.md`](./references/toolkit-actions.md). It also covers the Intercom
 > ticket **Motivo/Submotivo taxonomy** (the most error-prone part), the Google Sheets
 > **access-check flow** (verify the sheet is shared with the service account BEFORE configuring),
@@ -862,7 +862,7 @@ credentials before its actions can be used.
 Both expose the same `SLACK_SEND_MESSAGE` action with the same params — only the registry slug differs. In Step 1 check which one is `is_connected: true` and use **that** slug in the metadata paths below. A project typically has one or the other, not both.
 
 > The other toolkits (Intercom Tickets/Conversations, Zendesk, Pylon, GU1, Notion Databases,
-> Google Sheets) follow the same connect → discover → configure pattern — each action, its params,
+> Google Sheets, Cal.com) follow the same connect → discover → configure pattern — each action, its params,
 > and how to wire it into instructions is documented in
 > [`references/toolkit-actions.md`](./references/toolkit-actions.md). Google Sheets is the one
 > twist: it's enabled with no credentials, and each spreadsheet must pass the `sheet_access`

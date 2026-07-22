@@ -349,7 +349,7 @@ All fields optional — same shape as create.
 ## Custom Toolkits & Tool Configurations (Pills)
 
 Toolkit actions (Intercom Tickets/Conversations, Slack, Zendesk, Pylon, GU1, Notion Databases,
-Google Sheets) are wired into instructions as **pills**: `{{ custom_tool: short_name }}`, each
+Google Sheets, Cal.com) are wired into instructions as **pills**: `{{ custom_tool: short_name }}`, each
 backed by a **tool configuration** (one action with its params pinned / assistant-decided /
 context-driven). See [`toolkit-actions.md`](./toolkit-actions.md) for the conceptual guide +
 full action catalog. All of these accept the project (`sbs_`) token.
@@ -375,7 +375,7 @@ options, description, literal_only, default_mode, hintable, access_check`.
 `members?channel=<id>`; Intercom `ticket_types`, `ticket_type_attributes?ticket_type_id=<id>`,
 `settable_attributes`; Notion `databases`, `database_properties?database_id=<id>`; Google Sheets
 `sheet_access[?spreadsheet_id=<url-or-id>]` (returns a dict — the access check),
-`sheet_columns?spreadsheet_id=<id>`, `sheet_column_options?spreadsheet_id=<id>`.
+`sheet_columns?spreadsheet_id=<id>`, `sheet_column_options?spreadsheet_id=<id>`; Cal.com `event_types`.
 Reads the stored credentials — needs the toolkit connected.
 
 ### List tool configurations (pills)
