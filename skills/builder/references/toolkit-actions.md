@@ -1,9 +1,10 @@
 # Toolkit Actions — the full catalog & how to wire them into instructions
 
 Toolkit actions let an assistant *do* things in a third-party system mid-conversation:
-create a support ticket, close the conversation, set attributes, post to Slack. This
-reference covers **every** toolkit action Studio Chat supports and how to make an
-assistant use it from its instructions.
+create a support ticket, close the conversation, set attributes, post to Slack, add an entry
+to a Notion database, append or look up a row in a Google Sheet. This reference covers
+**every** toolkit action Studio Chat supports and how to make an assistant use it from its
+instructions.
 
 > The Slack walkthrough in `SKILL.md` (**Toolkit Actions**) is the worked example of the
 > connect → discover → configure → wire workflow. This file generalizes it to all toolkits
@@ -63,6 +64,22 @@ Ecuador* applies only when *Motivo* is *"Retiros Ecuador"*). The service doesn't
 dependencies — the configuration replicates them — so set the condition explicitly. It works whether
 the parent is pinned or assistant-decided; the pinned `"<id>:<label>"` value is matched by id or
 label. The deep dive below is the canonical example.
+
+**`access_check`** — a param (Google Sheets `spreadsheet_id`) whose value must pass a live
+connectivity check before the action can work. The same check is exposed as a metadata type,
+so verify programmatically **before** creating the pill (see the Google Sheets section).
+
+**Optional static params with an on/off state.** A param like Notion's `page_content` has three
+states: pinned (a fixed body/template in `params`), assistant-written (just leave it out), or
+**off** — list its key in the `__empty_fields__` meta (base64 JSON array in `params`) to disable
+it entirely. A `hintable` param also accepts an operator hint via the `__param_hints__` meta
+(base64 JSON `{param_key: hint}`) that guides the assistant when it writes the value.
+
+**`unsupported: true` children.** Some dynamic children exist upstream but cannot be written by
+the toolkit (Notion `relation`/`people`/`formula`/rollup/… properties). The metadata endpoint
+returns them flagged `unsupported` with a reason — NEVER put them in `params` or
+`dynamic_schema`; they exist in the response so you can tell the customer why that field can't
+be filled.
 
 ---
 
@@ -159,6 +176,131 @@ customer reports an outage, post a heads-up with `{{ custom_tool: notify_oncall_
 |---|---|---|
 | **`GU1_GET_COMPANY`** | Reads a company's KYB status, risk score, and verification details (read-only). | `company_id` |
 
+### Notion Databases — `NOTION_DATABASES` (api_key)
+Add entries (pages) to **existing** Notion databases — it never creates databases. Credentials:
+a Notion internal integration token (`secret_`/`ntn_`); each target database must be explicitly
+**shared with the integration** in Notion (⋯ → Connections), or it won't appear in `databases`.
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`NOTION_DATABASES_ADD_ENTRY`** | Creates a real entry/page in a database (irreversible). | `database_id` (pin-only, from `databases`, stored `"<id>:<label>"`) · **the database's own properties** as dynamic children (from `database_properties?database_id=<id>`) · `page_content` (optional page body — pin it, let the assistant write it, or turn it off) |
+
+**Discovery:**
+
+```bash
+GET .../custom-toolkits/NOTION_DATABASES/metadata/databases                         # only DBs shared with the integration
+GET .../custom-toolkits/NOTION_DATABASES/metadata/database_properties?database_id=<id>
+```
+
+Property descriptors map Notion types → config types: `title` (required; usually
+assistant-decides), `rich_text`/`url`/`email`/`phone_number` → text, `number` → typed number,
+`date` → typed date, `checkbox` → boolean, `select`/`status` → select with options,
+`multi_select` → multi-select. Entries flagged `unsupported: true` (relation, people, formula,
+rollup, …) cannot be written — skip them.
+
+**Config shape:**
+
+```json
+{
+  "params": {
+    "database_id": "1f3b2c…:Leads CRM",
+    "Fuente": "optid123:WhatsApp",
+    "__preconfigured_types__": "<base64 of {\"Fuente\":\"select\"}>",
+    "__param_hints__": "<base64 of {\"page_content\":\"Summarize the request in 2-3 lines\"}>"
+  },
+  "dynamic_schema": [
+    { "key": "Name", "name": "Name", "type": "text", "data_type": "title", "required": true },
+    { "key": "Estado", "name": "Estado", "type": "select", "data_type": "status",
+      "options": [ {"id": "…", "name": "Nuevo"}, {"id": "…", "name": "Contactado"} ] },
+    { "key": "Email", "name": "Email", "type": "text", "data_type": "email" }
+  ]
+}
+```
+
+Notes:
+- Pinned `select`/`status` values are `"<optionId>:<optionLabel>"`; pinned `multi_select` is a
+  comma-separated list of option ids (+ an optional `__<key>_labels__` display companion).
+  Record their types in `__preconfigured_types__` so the runtime builds the right payload.
+- **Page body (`page_content`)**: pin a fixed text/`{{deps.*}}` template in `params`; leave it
+  out entirely → the assistant may write the body (add a `__param_hints__` hint to guide it);
+  or disable it with `"__empty_fields__": "<base64 of [\"page_content\"]>"`.
+- Assistant-decides `date` properties must be ISO 8601 — the runtime already instructs the
+  model, no config needed.
+
+**In instructions:** *"When the visitor qualifies as a lead, register them with
+`{{ custom_tool: add_lead_9f3a1 }}`."* The pill pins the database and any fixed properties; the
+assistant fills name/email/status per conversation.
+
+### Google Sheets — `GOOGLE_SHEETS` (toggle — server-side service account)
+Append rows to / look up values in a Google Sheet. No customer credentials: the customer just
+**enables** the toolkit, then shares each target spreadsheet as **Editor** with the platform's
+service-account email. Only the **first sheet (tab)** is used; its **header row (row 1)**
+defines the columns and must pre-exist.
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`GOOGLE_SHEETS_ADD_ROW`** | Appends one row (irreversible). | `spreadsheet_id` (pin-only, URL or bare id — verify with `sheet_access` first) · **the sheet's columns** as dynamic children (from `sheet_columns?spreadsheet_id=<id>`) |
+| **`GOOGLE_SHEETS_FIND_ROW`** | Checks whether a value exists in one column; returns `found: true/false` (+ row number). Read-only. | `spreadsheet_id` (pin-only) · `search_column` (pin-only, from `sheet_column_options?spreadsheet_id=<id>`) · `search_value` (fixed, `{{deps.contact.email}}`, or assistant-decided) |
+
+**Discovery / access-check flow (mandatory before configuring):**
+
+```bash
+# 1. Learn the service-account email (works before any sheet is involved)
+GET .../custom-toolkits/GOOGLE_SHEETS/metadata/sheet_access
+#    → {configured, service_account_email}          ← ask the customer to share the
+#                                                      spreadsheet as EDITOR with this email
+# 2. Verify access to the specific spreadsheet (accepts full URL or bare id)
+GET .../custom-toolkits/GOOGLE_SHEETS/metadata/sheet_access?spreadsheet_id=<url-or-id>
+#    → {access: true, title, first_sheet, …}   or   {access: false, error: "no_access"|"not_found"|"invalid_id"}
+# 3. Fetch the columns / column options
+GET .../custom-toolkits/GOOGLE_SHEETS/metadata/sheet_columns?spreadsheet_id=<id>
+GET .../custom-toolkits/GOOGLE_SHEETS/metadata/sheet_column_options?spreadsheet_id=<id>
+```
+
+Do **not** create the pill until `sheet_access` returns `access: true` — the runtime would fail
+on every call. Save the returned `title` as the `__spreadsheet_title__` meta: it flows into the
+tool's description so the model knows exactly which sheet it targets (critical when several
+sheet pills coexist).
+
+**Config shapes:**
+
+```json
+// ADD_ROW — pin the fixed/context columns, let the assistant fill the rest
+{
+  "params": {
+    "spreadsheet_id": "https://docs.google.com/spreadsheets/d/1AbC…/edit",
+    "Origen": "WhatsApp",
+    "Email": "{{deps.contact.email}}",
+    "__spreadsheet_title__": "Leads 2026"
+  },
+  "dynamic_schema": [
+    { "key": "Nombre", "name": "Nombre", "type": "text", "data_type": "string" },
+    { "key": "Consulta", "name": "Consulta", "type": "text", "data_type": "string",
+      "hint": "One-line summary of what they asked for" }
+  ]
+}
+
+// FIND_ROW — membership check against a column
+{
+  "params": {
+    "spreadsheet_id": "1AbC…",
+    "search_column": "Email",
+    "search_value": "{{deps.contact.email}}",
+    "__spreadsheet_title__": "Whitelist beta"
+  }
+}
+```
+
+Notes:
+- Column keys in `params`/`dynamic_schema` are the **exact header texts** from `sheet_columns`.
+- Omit `search_value` from `params` to let the assistant decide it at runtime.
+- Rows are matched/written against the live header row: if the customer later renames a header,
+  the ADD_ROW result includes a `dropped_columns` warning (values that no longer matched).
+
+**In instructions:** *"Before answering pricing questions, check the beta whitelist with
+`{{ custom_tool: find_row_c4d2e }}`; if `found` is false, offer the waitlist and register them
+with `{{ custom_tool: add_row_88a1b }}`."*
+
 ---
 
 ## Deep dive: Intercom ticket taxonomy (Motivo / Submotivo)
@@ -236,6 +378,18 @@ Notes:
   CLOSE_CONVERSATION, and ticket-linking act on the *current* conversation — `contact_email`
   is typically `{{deps.contact.email}}`, and the conversation id comes from context, not a
   param.
+- **Base64 meta values are UTF-8.** `__dynamic_schema__`, `__preconfigured_types__`,
+  `__empty_fields__`, `__param_hints__` are base64-encoded **UTF-8** JSON — encode accented /
+  emoji attribute names as UTF-8 bytes before base64.
+- **Notion: the database must be shared with the integration.** An empty `databases` list (or a
+  missing database) almost always means the customer hasn't added the integration under the
+  database's ⋯ → Connections. This toolkit never creates databases — the database and its
+  properties must pre-exist.
+- **Sheets: verify access BEFORE configuring.** `sheet_access` with the spreadsheet id must
+  return `access: true` (customer shares the sheet as **Editor** with the service-account
+  email). Only the first tab is used; columns = the header row. Distinct rows in one
+  conversation both append (same-row retries are deduped), and FIND_ROW matching is
+  case-insensitive with numeric tolerance ("500" matches a cell showing "$500.00").
 
 ---
 

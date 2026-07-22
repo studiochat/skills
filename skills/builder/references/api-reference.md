@@ -348,11 +348,11 @@ All fields optional — same shape as create.
 
 ## Custom Toolkits & Tool Configurations (Pills)
 
-Toolkit actions (Intercom Tickets/Conversations, Slack, Zendesk, Pylon, GU1) are wired into
-instructions as **pills**: `{{ custom_tool: short_name }}`, each backed by a **tool
-configuration** (one action with its params pinned / assistant-decided / context-driven). See
-[`toolkit-actions.md`](./toolkit-actions.md) for the conceptual guide + full action catalog.
-All of these accept the project (`sbs_`) token.
+Toolkit actions (Intercom Tickets/Conversations, Slack, Zendesk, Pylon, GU1, Notion Databases,
+Google Sheets) are wired into instructions as **pills**: `{{ custom_tool: short_name }}`, each
+backed by a **tool configuration** (one action with its params pinned / assistant-decided /
+context-driven). See [`toolkit-actions.md`](./toolkit-actions.md) for the conceptual guide +
+full action catalog. All of these accept the project (`sbs_`) token.
 
 ### List connected toolkits
 `GET /projects/{pid}/custom-toolkits` — every toolkit with `is_connected`, `connected_account_id`.
@@ -366,13 +366,17 @@ as `toolkit_connection_id` when creating a config.
 ### A toolkit's actions + configurable schema
 `GET /projects/{pid}/custom-toolkits/{toolkit_slug}/actions`
 Returns `{toolkit_slug, is_connected, connected_account_id, actions: [{tool_slug, params[], metadata_sources[]}]}`.
-Each param carries `key, label, type, required, llm_decideable, metadata_source, dynamic_children, options`.
+Each param carries `key, label, type, required, llm_decideable, metadata_source, dynamic_children,
+options, description, literal_only, default_mode, hintable, access_check`.
 
 ### Dynamic metadata (options for select/dynamic params)
 `GET /projects/{pid}/custom-toolkits/{toolkit_slug}/metadata/{metadata_type}`
 `metadata_type` comes from the action's `metadata_sources`. Examples: Slack `channels`,
 `members?channel=<id>`; Intercom `ticket_types`, `ticket_type_attributes?ticket_type_id=<id>`,
-`settable_attributes`. Reads the stored credentials — needs the toolkit connected.
+`settable_attributes`; Notion `databases`, `database_properties?database_id=<id>`; Google Sheets
+`sheet_access[?spreadsheet_id=<url-or-id>]` (returns a dict — the access check),
+`sheet_columns?spreadsheet_id=<id>`, `sheet_column_options?spreadsheet_id=<id>`.
+Reads the stored credentials — needs the toolkit connected.
 
 ### List tool configurations (pills)
 `GET /projects/{pid}/tool-configurations`
