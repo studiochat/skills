@@ -2,7 +2,7 @@
 name: builder
 description: >
   Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
-  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon), alerts, schedules, and trending topics. Use when asked
+  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets), alerts, schedules, and trending topics. Use when asked
   to create, update, or manage any aspect of an assistant's configuration, including wiring up the
   template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
 ---
@@ -842,11 +842,13 @@ tool (which the builder creates outright), a toolkit must be **connected by the 
 credentials before its actions can be used.
 
 > **Full catalog of every toolkit action** — Intercom Tickets/Conversations, Slack, Zendesk, Pylon,
-> GU1 — and how to configure each and wire it into instructions is in
+> GU1, Notion Databases, Google Sheets — and how to configure each and wire it into instructions is in
 > [`references/toolkit-actions.md`](./references/toolkit-actions.md). It also covers the Intercom
-> ticket **Motivo/Submotivo taxonomy** (the most error-prone part) and the audit endpoints that catch
-> a silently-broken pill. The Slack walkthrough below is the worked example of the shared
-> connect → discover → configure → wire workflow; **every** toolkit follows the same shape.
+> ticket **Motivo/Submotivo taxonomy** (the most error-prone part), the Google Sheets
+> **access-check flow** (verify the sheet is shared with the service account BEFORE configuring),
+> and the audit endpoints that catch a silently-broken pill. The Slack walkthrough below is the
+> worked example of the shared connect → discover → configure → wire workflow; **every** toolkit
+> follows the same shape.
 
 **The builder never connects a toolkit.** Connecting requires the customer's secret (a Slack bot token, an Intercom token) or an interactive OAuth flow — that's the user's job, in the UI. The builder's role is to **discover** what's connected and wire the available actions into instructions/skills. If an action you need belongs to a toolkit that isn't connected, **stop and ask the user to connect it first** — don't write the macro and hope.
 
@@ -859,9 +861,12 @@ credentials before its actions can be used.
 
 Both expose the same `SLACK_SEND_MESSAGE` action with the same params — only the registry slug differs. In Step 1 check which one is `is_connected: true` and use **that** slug in the metadata paths below. A project typically has one or the other, not both.
 
-> The other toolkits (Intercom Tickets/Conversations, Zendesk, Pylon, GU1) follow the same
-> connect → discover → configure pattern — each action, its params, and how to wire it into
-> instructions is documented in [`references/toolkit-actions.md`](./references/toolkit-actions.md).
+> The other toolkits (Intercom Tickets/Conversations, Zendesk, Pylon, GU1, Notion Databases,
+> Google Sheets) follow the same connect → discover → configure pattern — each action, its params,
+> and how to wire it into instructions is documented in
+> [`references/toolkit-actions.md`](./references/toolkit-actions.md). Google Sheets is the one
+> twist: it's enabled with no credentials, and each spreadsheet must pass the `sheet_access`
+> check (shared as Editor with the service account) before you configure a pill against it.
 
 ### The workflow (run this whenever the user asks for "send a Slack message")
 
