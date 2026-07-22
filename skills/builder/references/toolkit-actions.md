@@ -183,7 +183,7 @@ Cal.com API key (`cal_…`, from Settings → Developer → API keys).
 
 | Action | What it does | Key params |
 |---|---|---|
-| **`CAL_COM_GET_AVAILABILITY`** | Lists available slots for an event type (read-only). Slots come back grouped by date, in the resolved time zone. | `event_type_id` (pin-only, from `event_types`) · `timezone` (optional — pin an IANA zone, use context, or leave to the assistant; defaults to the calendar owner's) · the assistant provides the ISO date range at runtime |
+| **`CAL_COM_GET_AVAILABILITY`** | Lists available slots for an event type (read-only). Slots come back grouped by date, in the resolved time zone. | `event_type_id` (pin-only, from `event_types`) · `timezone` (optional — pin an IANA zone, use context, or leave to the assistant; defaults to the calendar owner's) · `max_days_ahead` (optional pin, 1-90, default 31 — clamps how far ahead the assistant may search) · `max_slots` (optional pin, 1-60, default 60 — how many options are offered; set low, e.g. 6, for short lists) · the assistant provides the ISO date range at runtime ("next week" → dates) |
 | **`CAL_COM_BOOK_MEETING`** | Books a real meeting (irreversible — sends calendar invites). | `event_type_id` (pin-only) · `attendee_email` (usually `{{deps.contact.email}}`) · `attendee_name` (pin or assistant) · `timezone` (optional) · `language` (optional pin, 2-letter code for the booking emails) · the assistant provides `start` (a slot from availability, verbatim) and optional `notes` |
 
 **Discovery:** `GET .../custom-toolkits/CAL_COM/metadata/event_types` → `[{id, name}]` (name
@@ -204,6 +204,11 @@ includes the duration, e.g. `"Demo (30 min)"`).
 ```
 
 Notes:
+- **Virtual meetings (Google Meet / Cal Video / Zoom)**: the meeting *location* is configured on
+  the **event type in Cal.com**, not in the pill. With Google Meet set there (and Google Calendar
+  connected in Cal.com), every booking auto-generates the Meet link: the attendee gets the invite
+  by email, and the booking result's `location` carries the URL so the assistant can share it in
+  the chat immediately.
 - **Always wire BOTH pills together**: availability first, then booking. The booking `start`
   must be a slot the availability action returned — the runtime converts it to UTC and the
   tool description forbids invented times.
