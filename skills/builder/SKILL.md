@@ -25,15 +25,20 @@ reads in the approvals panel instead of the raw payload:
 
 ```bash
 python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
-  "description": "Links the new Refunds FAQ KB to the Support assistant so it can answer refund questions on its own. Before: 1 KB linked. After: 2 KBs. Asked by the user in chat."
+  "description": "Links the new Refunds FAQ KB to the Support assistant so it can answer refund questions on its own.\n\n## What changes\nAdds the **Refunds FAQ** KB to the Support assistant (1 → 2 KBs linked).\n\n## Why\nAsked by the user in chat — the assistant was handing off every refund question.\n\n## Impact & risk\nLow: additive, no existing content touched."
 }'
 ```
 
-Write it for the human admin (shown verbatim in the UI):
+**The description is rendered as Markdown** in the approvals panel — use it. Write it
+for the human admin (they read your text, never the raw payload):
 
-- WHAT changes and WHY — the user request or the data that motivated it
-- the relevant before → after in plain words (names, counts, key fields), not JSON
-- a few sentences, in the language the account operates in
+- Lead with a **one-line summary** of WHAT changes and WHY.
+- Make it skimmable with Markdown: `##` headings, bullet lists, and **tables** to compare
+  options or lay out before → after in plain words (names, counts, key fields — not JSON).
+- For anything non-trivial, a good shape is: summary · `## What changes` · `## Why`
+  (with real numbers/evidence when you have them) · `## Impact & risk`.
+- Be specific and concrete — a vague one-liner is worse than no description. Write in the
+  language the account operates in.
 
 Then tell the user the change is queued for approval. Only PENDING approvals accept a
 description (409 once reviewed); you can re-PATCH to refine it while it is pending.

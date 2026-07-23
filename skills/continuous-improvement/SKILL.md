@@ -204,16 +204,19 @@ instead of an immediate write. So:
 
 - Push **one change per logical edit** so each approval is reviewable on its own (don't bundle a
   tone change and a new refund casuística into one opaque diff).
-- **Describe every approval right after the 202** — the reviewer reads your text, not the payload:
+- **Describe every approval right after the 202** — the reviewer reads your text, not the
+  payload, and it **renders as Markdown**, so make it structured and skimmable:
 
   ```bash
   python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
-    "description": "WHAT changes and WHY, plus the before → after in plain language."
+    "description": "One-line summary.\n\n## What changes\n...\n\n## Why\n... (numbers/evidence)\n\n## Impact & risk\n..."
   }'
   ```
 
-  Include the policy being added/changed, what motivated it (the user ask, the trend, the
-  conversation), and the observable before → after. Pending-only (409 once reviewed).
+  Lead with a one-line summary, then use `##` headings, bullet lists and tables. Include the
+  policy being added/changed, what motivated it (the user ask, the trend, the conversation
+  with real numbers), and the observable before → after. For text edits, embed a
+  `[[before]]/[[after]]` diff block (see the builder skill). Pending-only (409 once reviewed).
 - **Confirm each change with the user before pushing it** (builder confirms every write anyway),
   then **wait for the human to approve** the queued change(s) and for the **new version to go
   live**. Get the new version ID.
