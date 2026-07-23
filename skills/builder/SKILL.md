@@ -25,7 +25,7 @@ reads in the approvals panel instead of the raw payload:
 
 ```bash
 python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
-  "description": "Links the new Refunds FAQ KB to the Support assistant so it can answer refund questions on its own.\n\n## What changes\nAdds the **Refunds FAQ** KB to the Support assistant (1 → 2 KBs linked).\n\n## Why\nAsked by the user in chat — the assistant was handing off every refund question.\n\n## Impact & risk\nLow: additive, no existing content touched."
+  "description": "Vincula la nueva KB de FAQ de Reembolsos al asistente de Soporte para que pueda responder sobre reembolsos por su cuenta.\n\n## Qué cambia\nAgrega la KB **FAQ de Reembolsos** al asistente de Soporte (1 → 2 KBs vinculadas).\n\n## Por qué\nPedido del usuario en el chat — el asistente derivaba cada consulta de reembolso.\n\n## Impacto y riesgo\nBajo: es aditivo, no toca contenido existente."
 }'
 ```
 
@@ -35,10 +35,12 @@ for the human admin (they read your text, never the raw payload):
 - Lead with a **one-line summary** of WHAT changes and WHY.
 - Make it skimmable with Markdown: `##` headings, bullet lists, and **tables** to compare
   options or lay out before → after in plain words (names, counts, key fields — not JSON).
-- For anything non-trivial, a good shape is: summary · `## What changes` · `## Why`
-  (with real numbers/evidence when you have them) · `## Impact & risk`.
-- Be specific and concrete — a vague one-liner is worse than no description. Write in the
-  language the account operates in.
+- For anything non-trivial, a good shape is: summary · what changes · why (with real
+  numbers/evidence when you have them) · impact & risk.
+- **Write the whole description — the section headings included — in the language the account
+  operates in** (the same language as the conversation), not necessarily English. The English
+  headings above are just the structure; translate them (e.g. `## Qué cambia`, `## Por qué`).
+- Be specific and concrete — a vague one-liner is worse than no description.
 
 Then tell the user the change is queued for approval. Only PENDING approvals accept a
 description (409 once reviewed); you can re-PATCH to refine it while it is pending.
