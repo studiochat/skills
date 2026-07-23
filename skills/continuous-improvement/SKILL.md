@@ -209,11 +209,12 @@ instead of an immediate write. So:
 
   ```bash
   python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
-    "description": "One-line summary.\n\n## What changes\n...\n\n## Why\n... (numbers/evidence)\n\n## Impact & risk\n..."
+    "description": "Resumen en una línea.\n\n## Qué cambia\n...\n\n## Por qué\n... (números/evidencia)\n\n## Impacto y riesgo\n..."
   }'
   ```
 
-  Lead with a one-line summary, then use `##` headings, bullet lists and tables. Include the
+  Lead with a one-line summary, then use `##` headings, bullet lists and tables — **written in
+  the language the account operates in** (headings included), not necessarily English. Include the
   policy being added/changed, what motivated it (the user ask, the trend, the conversation
   with real numbers), and the observable before → after. For text edits, embed a
   `[[before]]/[[after]]` diff block (see the builder skill). Pending-only (409 once reviewed).
