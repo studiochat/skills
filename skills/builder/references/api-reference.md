@@ -375,7 +375,8 @@ options, description, literal_only, default_mode, hintable, access_check`.
 `members?channel=<id>`; Intercom `ticket_types`, `ticket_type_attributes?ticket_type_id=<id>`,
 `settable_attributes`; Notion `databases`, `database_properties?database_id=<id>`; Google Sheets
 `sheet_access[?spreadsheet_id=<url-or-id>]` (returns a dict — the access check),
-`sheet_columns?spreadsheet_id=<id>`, `sheet_column_options?spreadsheet_id=<id>`; Cal.com `event_types`.
+`sheet_columns?spreadsheet_id=<id>`, `sheet_column_options?spreadsheet_id=<id>`; Cal.com `event_types`;
+Kommo `settable_fields`, `pipelines`, `pipeline_statuses?pipeline_id=<id>`, `lead_tags`.
 Reads the stored credentials — needs the toolkit connected.
 
 ### List tool configurations (pills)
