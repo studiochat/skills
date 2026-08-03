@@ -173,8 +173,8 @@ needed):
 `{{ kb(KB_ID) }}` · `{{ tool(TOOL_ID) }}` · `{{ custom_tool: short_name }}` ·
 `{{ examples: BLOCK_ID }}` · `{{ integration(TOOLKIT) }}` · `{{ context: path | fallback }}`
 
-See `playbook-macros` in this same folder for what each one does. The object has to exist
-first — a macro pointing at a missing id silently degrades to literal text.
+See **Template macros (the "pills")** in `SKILL.md` for what each one does. The object has to
+exist first — a macro pointing at a missing id silently degrades to literal text.
 
 > **Gotcha — tags don't whitelist from a task.** The closed list of tags the assistant may emit
 > is parsed from backticked tokens in the **base instructions and skills only**; a task's text is
