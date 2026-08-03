@@ -1,10 +1,11 @@
 ---
 name: builder
 description: >
-  Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
+  Build and configure Studio Chat assistants — instructions, knowledge bases, skills, tasks, example blocks,
   API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets, Cal.com), alerts, schedules, and trending topics. Use when asked
-  to create, update, or manage any aspect of an assistant's configuration, including wiring up the
-  template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
+  to create, update, or manage any aspect of an assistant's configuration, including writing the
+  proactive tasks an assistant is assigned (with their {{success}} / {{failure}} outcome pills) and
+  wiring up the template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
 ---
 
 # Builder
@@ -529,6 +530,100 @@ Each referenced KB / tool / action is registered in the agent **even before** th
 > **No save-time validation.** A playbook saves fine even if a macro points at something that doesn't exist or a toolkit action that isn't connected — at runtime the macro silently degrades to literal text and the action just isn't available (only a log warning). Always confirm the referenced object exists before writing the macro.
 >
 > There is **no** `{{ composio_tool: … }}` macro (Composio was removed).
+
+---
+
+## Tasks
+
+A **task** is concrete, finite work an assistant is sent to drive to completion inside one
+conversation — *collect these three documents*, *regularize this debt*. A skill **waits** for the
+situation that matches it; a task is **already running** from the moment it is assigned, and the
+assistant is the one who opens it.
+
+> **If what you're writing can't finish, it's a skill, not a task.**
+
+Gated by the per-account `tasks` feature flag (superadmin → Feature Flags). An assistant carries
+a **catalog** of tasks; which one a given conversation pursues is decided at assignment time, not
+here. One live task per conversation — a second one while the first is in progress is a 409.
+
+**Full guide — read it before writing or reviewing a task:
+[references/tasks.md](references/tasks.md).** It covers the shape that works, the outcome pills,
+what the runtime already tells the assistant (so you don't waste prose re-saying it), the
+follow-up cron, and the preview checklist.
+
+### The catalog
+
+Tasks live on the playbook **version** (editing one creates a version, like a skill) and are
+three fields: `id` (minted on write, stable across renames — never invent one), `name`
+(kebab-case), `instructions` (prose).
+
+```bash
+# Read — the ids live here
+python3 scripts/api.py "/playbooks/BASE_ID/latest" | jq '.tasks'
+
+# Write — FULL REPLACEMENT of the array, creates a version, queued for approval
+python3 scripts/api.py "/playbooks/BASE_ID/latest" -X PATCH --body '{
+  "tasks": [
+    {"id": "tsk_7f3ab2c19d04", "name": "cobrar-deuda", "instructions": "…"},
+    {"name": "validar-identidad", "instructions": "…"}
+  ]
+}'
+```
+
+**Always read the current array and resend it whole**, keeping every existing `id`. A PATCH
+carrying only the task you're adding deletes all the others; a task resent without its `id` gets
+a new one minted, orphaning whatever referenced the old one.
+
+### The outcome pills
+
+Two macros exist only inside a task, and they are how it ends:
+
+| You write | The assistant reads |
+|---|---|
+| `{{success}}` | `the task is DONE (report task.status = "done")` |
+| `{{failure}}` | `the task has FAILED (report task.status = "failed")` |
+
+Write each one **inside the sentence that states its condition**, so the branch and its outcome
+read as one thought — `Cuando los tres documentos estén recibidos y legibles, {{success}}.` Use
+as many as the task has branches. **No `{{success}}` and it never stops pushing past the goal;
+no `{{failure}}` and it never ends** — the run stays open, holds the conversation's only slot,
+and keeps qualifying for follow-ups.
+
+The give-up rule ("insist for three days, then stop") is prose in the instructions. No config
+field carries it — `task_nudge_max` is only a backstop.
+
+The [template macros](#template-macros-the-pills) work here too, and the KBs/tools they reference
+are wired in from turn zero. One exception: **the tag whitelist is parsed from instructions and
+skills only, never from a task** — a tag that appears only inside a task is silently dropped, so
+declare it in the instructions too.
+
+### Try it before shipping it
+
+The preview is the real thing minus delivery: assign the task, then run a turn with **no user
+message** — exactly what a production proactive start sends.
+
+```bash
+# 1. Assign (the conversation doesn't have to exist yet)
+python3 scripts/api.py "/playbooks/BASE_ID/conversations/preview-001/task" \
+  --params version=7 -X POST --body '{"task_id": "tsk_7f3ab2c19d04"}'
+
+# 2. The turn nobody asked for — the task drives it
+python3 scripts/api.py "/playbooks/BASE_ID/versions/7/preview/chat" -X POST --body '{
+  "conversation_id": "preview-001", "user_message": ""
+}'
+```
+
+Check, in this order: it **opens** with the task (not "¿en qué te puedo ayudar?"), asks **one**
+thing at a time, reaches `done` with a cooperative customer, reaches `failed` with a refusing
+one, survives a detour, and still sounds like the assistant. The `task` block on every response
+(`status` + `reason`) is its own read on where it is.
+
+### Follow-ups when the customer goes quiet
+
+A cron chases a live task after `task_nudge_delay_minutes × 3^follow-ups-already-sent` (default
+60min → 1h / 3h / 9h), capped by `task_nudge_max` (default 2). Both are playbook-level settings
+(`PATCH /playbooks/PLAYBOOK_ID/settings`) — the delay **is** the urgency dial, there is no
+separate field. Handed-off, preview and eval conversations never qualify.
 
 ---
 
