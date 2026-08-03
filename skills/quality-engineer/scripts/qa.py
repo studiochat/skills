@@ -26,6 +26,7 @@ Usage:
     qa.py runs results RUN_ID [-o file.json]
     qa.py runs cancel RUN_ID
     qa.py chat PLAYBOOK_BASE_ID --message "text" [--conversation-id ID] [--context '{}']
+    qa.py chat PLAYBOOK_BASE_ID --task tsk_abc123 --message ""   # simulate an assigned task
                                 [--instructions-file FILE | --instructions TEXT]
                                 [--skills-file FILE] [--examples-file FILE]
                                 [--kb-ids id1,id2] [--api-tools t1,t2]
@@ -431,11 +432,30 @@ def cmd_chat(
     verbose=False,
     playbook_override=None,
     tool_mocks=None,
+    task_id=None,
 ):
     if not conversation_id:
         import uuid
 
         conversation_id = f"qa_{uuid.uuid4().hex[:12]}"
+
+    if task_id:
+        # Assignment is its own endpoint on purpose: a task is set once and
+        # lives across turns, and it has to be settable before the conversation
+        # has a single message -- which is exactly this case. Send it on the
+        # FIRST call only; re-sending it after the assistant reported
+        # done/failed deliberately restarts the task.
+        assigned = _request(
+            "POST",
+            f"/playbooks/{base_id}/conversations/{conversation_id}/task",
+            body={"task_id": task_id},
+            params={"version": "active"},
+        )
+        task = (assigned or {}).get("task") or {}
+        print(
+            f"  ↳ task assigned: {task.get('name') or task_id}",
+            file=sys.stderr,
+        )
 
     body = {
         "conversation_id": conversation_id,
@@ -477,6 +497,17 @@ def cmd_chat(
     if tool_mocks is not None:
         print(
             f"  ↳ tool mocks active (tools: {', '.join(sorted(tool_mocks.keys()))})",
+            file=sys.stderr,
+        )
+
+    # -- Task status: the assistant's own read on where its task stands. Printed
+    # -- for every turn of a task-driven conversation, not just the first.
+    task_read = data.get("task")
+    if isinstance(task_read, dict) and task_read.get("status"):
+        reason = task_read.get("reason") or ""
+        print(
+            f"  ↳ task [{task_read.get('name') or task_read.get('id')}]: "
+            f"{task_read['status']}{' — ' + reason if reason else ''}",
             file=sys.stderr,
         )
 
@@ -687,13 +718,21 @@ def main():
 
     elif group == "chat":
         if len(args) < 2:
-            print("Usage: qa.py chat PLAYBOOK_BASE_ID --message 'text' [--verbose]", file=sys.stderr)
+            print(
+                "Usage: qa.py chat PLAYBOOK_BASE_ID --message 'text' [--task TASK_ID] [--verbose]",
+                file=sys.stderr,
+            )
             sys.exit(1)
         base_id = args[1]
+        task_id = get_flag("--task")
         message = get_flag("--message")
         if not message:
-            print("Error: --message is required", file=sys.stderr)
-            sys.exit(1)
+            # An empty message is only meaningful with a task: nobody wrote
+            # anything and the task itself drives the opening turn.
+            if not task_id:
+                print("Error: --message is required (empty is allowed with --task)", file=sys.stderr)
+                sys.exit(1)
+            message = ""
         conversation_id = get_flag("--conversation-id")
         context = None
         context_raw = get_flag("--context")
@@ -717,6 +756,7 @@ def main():
             verbose=verbose,
             playbook_override=playbook_override,
             tool_mocks=_load_tool_mocks_file(get_flag("--tool-mocks-file")),
+            task_id=task_id,
         )
 
     elif group == "dry-run":
