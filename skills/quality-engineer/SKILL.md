@@ -6,6 +6,8 @@ description: >
   Also the end-to-end loop to debug and fix incorrect assistant behaviour
   starting from a conversation ID: root-cause it, validate a fix via overrides
   without saving a version, hand off to the human, and add regression evals.
+  Also simulates an assigned task end to end (assign it, let it open the
+  conversation, drive it to done/failed).
   Use when asked to test an assistant, create QA scenarios, run evals,
   check assertion pass rates, verify assistant behavior, or investigate a
   conversation where the assistant misbehaved.
@@ -285,6 +287,10 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hi" \
 # Chat with MOCKED tool responses (stub Slack / KB / API tools — admin only)
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Quiero un reembolso de ORD-99999" \
     --tool-mocks-file ./mocks.json
+
+# Simulate an ASSIGNED TASK: assign it, then let it open the conversation
+# (empty message on purpose — see "Simulating an assigned task")
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --task tsk_7f3ab2c19d04 --message ""
 
 # Dry-run a candidate eval case WITHOUT persisting it (validate the case
 # definition before committing it via `cases create`)
@@ -638,6 +644,44 @@ Both endpoints accept a `playbook_override` object on the request body. The CLI 
 ```
 
 Any subset of these keys is valid — omitted keys keep the saved playbook value.
+
+---
+
+## Simulating an assigned task
+
+A **task** is finite work an assistant is assigned and drives to completion in one conversation
+(*collect these documents*, *regularize this debt*). Unlike a skill it doesn't wait for a
+matching situation — it is already running, and the assistant is the one who opens it. Testing
+one means starting the conversation the way production does: **assign the task, then run a turn
+with no user message.**
+
+```bash
+# The turn nobody asked for — empty message, the task drives it
+python3 scripts/qa.py chat BASE_ID --task tsk_7f3ab2c19d04 --message ""
+
+# Then play the customer on the same conversation, WITHOUT --task
+python3 scripts/qa.py chat BASE_ID --conversation-id qa_abc123 --message "ahí te mando el dni"
+```
+
+`--task` assigns first (`POST /playbooks/BASE_ID/conversations/{id}/task?version=active`) and
+then chats. Every turn prints the assistant's own read on the task — `status` (`in_progress` /
+`done` / `failed`) and one sentence of `reason`.
+
+- **Send `--task` on the first call only.** Re-assigning while it is in progress is a harmless
+  no-op, but re-sending it *after* a terminal status deliberately **restarts** the task. A
+  different task while one is live is a **409**.
+- Task ids come from the assistant's catalog (`GET /playbooks/BASE_ID/latest` → `.tasks`).
+- `qa.py chat` conversations are `is_eval`, so they never qualify for the follow-up cron.
+
+**What to check, in this order:** it opens *with* the task (not "¿en qué te puedo ayudar?"); it
+asks one thing at a time; it reaches `done` with a cooperative customer; it reaches `failed`
+with a refusing one (a task that can't fail chases forever); it survives an off-topic detour and
+comes back; and it still sounds like the assistant.
+
+If it never reaches a terminal status, the problem is almost always the task text, not the
+assistant: the `{{success}}` / `{{failure}}` pills mark where a task ends, and one that has
+neither cannot report anything but `in_progress`. Authoring rules live in the **builder** skill
+(`references/tasks.md`).
 
 ---
 
