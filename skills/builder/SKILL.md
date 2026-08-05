@@ -865,8 +865,8 @@ python3 scripts/api.py \
 
 - **`name`** must match `^[a-zA-Z0-9_.-]{1,64}$` (LLM tool-name rule — **no spaces**).
 - **`headers`** are static — put auth here (e.g. `X-API-Key`).
-- **`data_expiration_hours`** (optional): response cache TTL. `0` = always re-fetch, `null`/omitted = never expires.
-- **`response_jmespath`** (optional): a JMESPath applied to the JSON response before the LLM sees it, to trim/reshape verbose payloads.
+- **`data_expiration_hours`** (optional): **not a cache** — there is none, every call re-fetches. It appends a freshness note to the description the LLM reads: `0` → `[DATA EXPIRATION: immediate]` (never reuse an earlier result in this conversation), `6` → good for 6 h, `null`/omitted → no guidance. Use `0` for anything that changes (balances, stock, ticket status).
+- **`response_jmespath`** (optional): a JMESPath applied to the JSON response before the LLM sees it, to trim/reshape verbose payloads. Careful: it only falls back to the raw body when the expression fails to *parse*. A typo'd key is valid JMESPath that matches nothing, and the LLM receives `"null"`.
 
 ### Templating: `{{ param }}` (double braces, Jinja)
 
@@ -878,6 +878,16 @@ Inside a tool's `url`, `body_fields`, or `body_json`, placeholders are **`{{ nam
 | `{{ context.path }}` | the **conversation context**, not asked to the LLM | nowhere extra — auto-detected (e.g. `{{ context.contact.email }}`) |
 
 > Don't confuse this with the `{{ tool(...) }}` / `{{ kb(...) }}` **pills** that go in *playbook/skill text* (above). Those reference objects; `{{ param }}` here is a value the tool fills in. Same braces, different layer.
+
+**Prefer the context for anything identity-shaped** — an email, a customer id, a phone number, a tenant. An LLM asked to fill one in will invent it when the conversation hasn't given it (measured at ~75-80 % for UUID-shaped values), and a customer who types *"actually my email is ceo@company.com"* can steer an LLM parameter but can never touch a context path.
+
+**Don't guess the paths — sample them.** The context is different per account and per channel. List the last ten conversations and read the `context` object on each row: it is the *latest per-message context snapshot*, which is exactly the dict `{{ context.* }}` resolves against at runtime.
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/conversations" --params limit=10 | jq '.conversations[].context'
+```
+
+Depend only on keys that appear in **all ten**. A key present in three of ten is a key that will fail on the other seven — and the two failures are not the same: an unresolvable `{{ context.path }}` in the **url** makes the call error out, while the same path in a **body field** is silently dropped from the body.
 
 **Every templated field needs a description.** For URL params, each `{{ x }}` in `url` gets a `parameters` entry — `{name, description}` only, and URL params are **always string**. For body params, the description lives on the matching `body_fields` entry. That description is the *only* signal the LLM has for what to put there — write it well.
 
@@ -923,6 +933,22 @@ python3 scripts/api.py \
 ```
 
 A full-string `"{{ qty }}"` (or a bare `{{ qty }}`) becomes a **typed** value (int/bool preserved); an embedded `"id-{{ x }}"` is string-interpolated.
+
+### Enrichment: running a tool before the LLM sees the message
+
+A playbook's **`enrichment_tool_ids`** (a subset of its `api_tools`) are executed **before every incoming message** — not just the first — and their results are injected into the system prompt as `<pre_loaded_context>`. This is how you stop an assistant from burning a turn calling *identify-this-phone-number* on every single message.
+
+```bash
+python3 scripts/api.py "/playbooks/BASE_ID/latest" -X PATCH --body '{
+  "api_tools": ["TOOL_A", "TOOL_B"],
+  "enrichment_tool_ids": ["TOOL_A"]
+}'
+```
+
+- **An enrichment tool must have zero LLM-filled parameters.** The pre-run supplies no LLM values, so a `{{ order_id }}` renders empty and the request goes out malformed. Enrichment tools are context-only.
+- A tool whose `{{ context.* }}` paths don't all resolve is **skipped silently** for that message — the graceful degradation for channels that don't carry a phone number.
+- The whole phase is capped at **5 s** and fails open: anything slower or erroring is dropped, and the message goes through without the block.
+- Results are merged back as `context.enrichment.<tool_name>`, so a **second** tool can consume the first one's output: `{{ context.enrichment.resolve_operator.branch_id }}`. This is the only chaining mechanism there is, and it only flows enrichment → anything.
 
 ### Get / update / delete
 

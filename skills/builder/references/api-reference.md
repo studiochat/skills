@@ -320,7 +320,7 @@ All fields optional:
     {"name": "subject", "type": "string|number|integer|boolean", "value": "{{ subject }} | literal | {{ context.path }}", "description": "LLM hint (templated values only)", "required": true}
   ],
   "body_json": "raw JSON template with {{ param }} (used when body_type=json)",
-  "data_expiration_hours": "int|null (response cache TTL; 0=always re-fetch, null=never)",
+  "data_expiration_hours": "int|null (NOT a cache — a freshness note appended to the description the LLM reads; 0=never reuse an earlier result, null=no guidance)",
   "response_jmespath": "string|null (optional JMESPath to trim the response before the LLM sees it)"
 }
 ```
