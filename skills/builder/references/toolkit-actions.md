@@ -136,6 +136,7 @@ Act on the *current* Intercom conversation and its contact.
 | Action | What it does | Key params |
 |---|---|---|
 | **`INTERCOM_CONVERSATIONS_FIND_DUPLICATES`** | Lists the user's open conversations — call it *before* creating a ticket/handoff to avoid duplicates. | `contact_email` · `state` (pin-only) |
+| **`INTERCOM_CONVERSATIONS_GET_STATUS`** | Reads one conversation's current state (open / closed / snoozed) and who it is assigned to. Answers "is that OTHER thread still open?" about a conversation surfaced by the person's history. | `conversation_id` (optional — leave empty and the assistant passes one, the usual setup; or pin a `{{deps.*}}` path to always check the conversation it points at) |
 | **`INTERCOM_CONVERSATIONS_CLOSE_CONVERSATION`** | Closes the current conversation, optionally leaving an internal note first. | `closing_note` (optional; LLM or pinned) |
 | **`INTERCOM_CONVERSATIONS_SET_HIGH_PRIORITY`** | Flags the conversation high-priority via a tag + an Intercom Workflow. | `tag_name` (pin-only — the tag your Workflow listens on) |
 | **`INTERCOM_CONVERSATIONS_SET_ATTRIBUTES`** | Sets custom attributes on the conversation and/or the contact (user). | dynamic attributes (from `settable_attributes`); each carries an `attr_model` = `conversation` \| `contact`. Pin the ones that are fixed, let the assistant decide the rest |

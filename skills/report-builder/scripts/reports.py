@@ -245,7 +245,7 @@ def main():
     p_update.add_argument("--email", help="Comma-separated email recipients")
     p_update.add_argument("--remove-email", action="store_true", help="Remove email delivery")
 
-    p_delete = sub.add_parser("delete", help="Delete a report (requires approval)")
+    p_delete = sub.add_parser("delete", help="Delete a report (immediate, not approval-gated)")
     p_delete.add_argument("report_id")
 
     p_run = sub.add_parser("run", help="Trigger a manual run")

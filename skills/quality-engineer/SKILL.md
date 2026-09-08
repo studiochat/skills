@@ -1733,14 +1733,24 @@ The most common request — full detail in the [QA Practice Workflow](#qa-practi
 8. **Human applies the new version** — deliver the final content, wait for confirmation + the new version ID
 9. **Eval coverage**: persist case(s) sized to the fix, run only them against the new version, then offer a full-suite run to catch regressions.
 
-## Gotchas adicionales
+## Additional gotchas
 
-- **In-memory overrides no crean versión en el historial.** Es el punto clave: podés validar un cambio sin polutar el historial de versiones. Siempre validar con override antes de publicar versión.
-- **`dry_run` no ejecuta tools reales** (APIs externas, etc.). Si el asistente usa API tools, los resultados en dry_run son simulados — el eval puede pasar en dry_run y fallar en producción si la tool devuelve datos reales distintos.
-- **Los conversation IDs de producción son los más valiosos para evals.** Un eval construido sobre una conversación real donde el agente falló es el mejor regression test.
-- **Assertion de "tone" es siempre subjetiva.** No poner assertions de tono en el grader automático — solo calidad objetiva: ¿respondió la pregunta correctamente?, ¿derivó cuando correspondía?
+- **In-memory overrides do not create a version.** That is the whole point: you can validate a
+  change without polluting the version history. Always validate with an override before
+  publishing a version.
+- **A dry run DOES call real tools unless you mock them.** There is no automatic sandbox: mocks
+  are installed only for the tools a case declares in `tool_mocks`; every other tool executes
+  for real against the live external API. Before dry-running an assistant with write-capable
+  tools (closing a ticket, booking a meeting, writing to a CRM), mock them explicitly — see
+  [Mocking Tools](#mocking-tools-tool_mocks).
+- **Enrichment tools are not mockable at all.** They run before the agent's first turn, outside
+  the `tool_mocks` mechanism.
+- **Production conversation IDs make the best evals.** A case built from a real conversation
+  where the assistant failed is the strongest regression test you can write.
+- **"Tone" assertions are always subjective.** Keep them out of the automatic grader — assert
+  objective quality only: did it answer the question, did it escalate when it should have.
 
-## Dependencias
+## Related skills
 
-- `customer-success:builder` — para aplicar los fixes validados.
-- `customer-success:continuous-improvement` — el loop proactivo que usa quality-engineer como herramienta de validación.
+- **builder** — to apply the fixes you validated.
+- **continuous-improvement** — the proactive loop that uses this skill as its validation step.

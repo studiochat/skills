@@ -109,6 +109,10 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 | `GET /projects/{pid}/analytics/kbs` | KB citation usage: total citations, by-source breakdown, time series, recent. Filters: kb_id, item_id, source, date range, search |
 | `GET /projects/{pid}/analytics/kbs/sparklines` | Lightweight per-KB daily citation counts for sparklines (trailing N days) |
 | `GET /projects/{pid}/analytics/kbs/{kb_id}/items` | Per-item citation traffic for a specific KB: item_id, count, sorted by most-cited. Use to find top FAQ/article/snippet items |
+| `GET /projects/{pid}/analytics/followups` | Follow-up (winback) attempts: totals, the per-attempt funnel, time series, recent sends. Filters: rule_id, playbook_base_id, date range, tags |
+| `GET /projects/{pid}/analytics/followups/sparklines` | Lightweight per-rule daily follow-up counts |
+| `GET /projects/{pid}/analytics/kb-searches` | KB search queries grouped by text, with avg/min top score and zero-result counts. **This is how you find KB gaps** — filter with `max_avg_score` + `min_count` |
+| `GET /projects/{pid}/analytics/api-tool-failures` | Failed API-tool calls only, each with its error payload, the request sent, and the conversation. Filters: api_tool_id, search, date range |
 
 ### Customer Outcomes (CSAT & Conversion)
 
@@ -146,7 +150,6 @@ Full specifications: [references/api-reference.md](references/api-reference.md)
 | `GET /playbooks/{base_id}/eval-cases` | Test cases for a playbook |
 | `GET /playbooks/{base_id}/eval-runs` | Test run history (paginated) |
 | `GET /eval-runs/{run_id}` | Full run results with per-case scores |
-| `GET /playbooks/{base_id}/eval-cases/export-yaml` | All cases in YAML format |
 
 ---
 
@@ -1020,8 +1023,27 @@ Every conversation query supports these filter dimensions. All filters are serve
 
 Always scope queries with `start_date` and `end_date` in ISO 8601 format.
 
+> **Send `timezone` on every analytics call, or your numbers will not match the dashboard.**
+> The API defaults to **UTC**; the dashboard sends the operator's **browser** zone. Same window,
+> different daily numbers — and nothing in the response says so. For an Argentine account that
+> is three hours of traffic on each edge of the window plus every day bucket shifted.
+>
+> ```bash
+> fetch.py "/projects/$STUDIO_PROJECT_ID/conversations/analytics" \
+>   --params start_date=2026-09-01 end_date=2026-09-07 timezone=America/Argentina/Buenos_Aires
+> ```
+>
+> `time_series[].timestamp` comes back as a **naive wall clock in the zone you asked for** — a
+> bucket key to render verbatim, not an instant to convert again.
+>
+> Full details, and the list of endpoints that accept it, in
+> [the API reference](references/api-reference.md#timezone-your-numbers-vs-the-dashboard).
+
 **Timezone handling:**
-- **UTC is the default.** If no timezone offset is provided, the timestamp is treated as UTC.
+- **`timezone` (IANA, e.g. `America/Argentina/Buenos_Aires`)** controls day buckets and
+  date-only windows. Defaults to UTC.
+- **UTC is the default for bare timestamps too.** If no offset is provided, the timestamp is
+  treated as UTC.
 - **Timezone-aware timestamps are supported.** You can pass any valid ISO 8601 offset.
 - The `export_conversations.py` script accepts short form dates and appends `T00:00:00Z` (UTC).
 
@@ -1112,13 +1134,26 @@ python3 scripts/fetch.py \
 
 ## Gotchas
 
-- **`playbook_base_id` para filtrar por asistente (todas las versiones), `playbook_id` para una versión específica.** Mezclarlos devuelve datos inconsistentes.
-- **Timezone: los timestamps de la API están en UTC.** Buenos Aires es UTC-3 (UTC-2 en verano). Ajustar siempre antes de mostrar fechas al usuario.
-- **Deflection rate = conversaciones sin handoff / total.** Si el cliente tiene handoffs manuales por canales fuera de Studio Chat, el denominador puede estar subestimado.
-- **CSAT solo aparece si el cliente lo habilitó.** No asumir que está disponible. Si el endpoint devuelve vacío, informarlo.
-- **Las métricas de conversión custom (`conversion-metrics`) son por slug, no auto-descubribles.** Necesitás saber el slug configurado para esa cuenta — no se puede listar todos.
-- **Volúmenes bajos hacen que los porcentajes sean engañosos.** Siempre mostrar el denominador (N conversaciones) junto con el rate. Un 95% de deflección sobre 20 conversaciones no es un dato publicable.
+- **`playbook_base_id` filters by assistant (all versions); `playbook_id` targets one specific
+  version.** Mixing them returns inconsistent data.
+- **Send `timezone` on every analytics call.** The API buckets in **UTC** by default while the
+  dashboard uses the operator's browser zone, so the same window returns different daily numbers
+  in each. Pass the account's IANA zone (e.g. `America/Argentina/Buenos_Aires`) and render
+  `time_series[].timestamp` verbatim — it is already a wall clock in that zone, not an instant
+  to convert.
+- **Deflection rate = conversations without handoff / total.** If the account also takes manual
+  handoffs through channels outside Studio Chat, the denominator is understated.
+- **CSAT only exists if the account enabled it.** Don't assume it is available; if the endpoint
+  comes back empty, say so rather than reporting zero.
+- **Custom conversion metrics are per slug and not discoverable.** You need the slug configured
+  for that account — there is no endpoint that lists them all.
+- **Follow-up conversion has three different denominators.** Say which one you used — see
+  [Follow-up conversion](references/api-reference.md#follow-up-conversion-is-three-different-numbers).
+- **Low volumes make percentages misleading.** Always show the denominator (N conversations)
+  next to the rate. 95% deflection over 20 conversations is not a publishable number.
 
-## Dependencias
+## Related skills
 
-`customer-success:data-expert` es dependencia de: `finance:invoice-generator`, `sales-marketing:case-study-generator`, `suggestions:kb-suggestions`, `customer-success:report-builder` (indirectamente).
+**builder** applies configuration changes this analysis motivates; **report-builder** packages
+recurring versions of these queries; **continuous-improvement** is the loop that turns a finding
+here into a shipped change.
