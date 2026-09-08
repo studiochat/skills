@@ -98,6 +98,26 @@ python3 scripts/reports.py run REPORT_ID --window 7
 python3 scripts/reports.py run-status RUN_ID
 ```
 
+> **Prefer the one-off endpoint for a question nobody will ask twice.**
+> `POST /projects/{pid}/reports/one-off` defines and runs a report in a single call: the
+> definition is marked `is_one_off`, stays out of the report list, has no schedule and no
+> delivery target, and you never have to remember to delete it. It also takes
+> `time_window_hours`, which is how people actually phrase it ("the last 24 hours").
+>
+> ```bash
+> python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/reports/one-off" -X POST --body '{
+>   "instructions": "What came in over the last 24 hours, and why did it hand off?",
+>   "time_window_hours": 24,
+>   "playbook_base_ids": ["BASE_ID"]
+> }'
+> ```
+>
+> Returns `202` with `{report, run}`. Poll the run, then collect the PDF from
+> `/reports/runs/{run_id}/pdf`. See
+> [the API reference](references/api-reference.md#one-off-report-define-and-run-in-one-call).
+>
+> Use `create` + `run` only when the user wants the definition to **stay**.
+
 ### Recurring Report
 
 When the user wants a scheduled report:
@@ -197,7 +217,14 @@ Full endpoint documentation: [references/api-reference.md](references/api-refere
 - **Las instrucciones del reporte deben ser en lenguaje natural claro.** SAMI las interpreta como si fuera un prompt — si son ambiguas, el output va a variar. Usar el Block Kit format para estructura consistente.
 - **`playbook_base_ids` filtra por asistente** — si no se especifica, el reporte agrega todos los asistentes del proyecto.
 - **Los reportes en Slack requieren el webhook configurado en la cuenta.** Verificar que el cliente tenga el Slack webhook activo antes de configurar delivery.
+- **Deleting a report is immediate — it is NOT queued for approval.** No report, alert or
+  monitor write goes through the approval queue. Confirm with the user before deleting.
+- **A failed run can be retried and an in-flight run can be cancelled** —
+  `POST /reports/runs/{run_id}/retry` (only from `failed`) and
+  `POST /reports/runs/{run_id}/cancel` (only from `pending`/`running`). A cancel that answers
+  `502` did **not** cancel: the upstream session could not be stopped, so retry.
 
-## Dependencias
+## Related skills
 
-Los reportes se ejecutan internamente con acceso a `customer-success:data-expert`. El skill de report-builder solo define el *qué* y *cuándo*.
+Reports execute internally with access to the **data-expert** skill. This skill only defines the
+*what* and the *when*.

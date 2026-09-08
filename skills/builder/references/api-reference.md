@@ -14,6 +14,9 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID`.
 |-------|------|---------|-------------|
 | `include_final_delete` | bool | false | Include permanently deleted KBs |
 | `include_playbook_usage` | bool | false | Include which playbooks use each KB |
+| `include_archived` | bool | false | Include archived KBs (they carry `is_archived: true` and `archived_at`) |
+
+Archived KBs are hidden by default. By `kb_id` an archived KB always resolves.
 
 ### Get KB
 `GET /knowledgebases/{kb_id}`
@@ -77,14 +80,116 @@ All fields optional — only include what you want to change:
 
 Sets status to EDITED. FILE KBs cannot be edited (400).
 
-### Delete KB
-`DELETE /knowledgebases/{kb_id}` — Soft delete (status → DELETED)
+### Archive KB
+`POST /knowledgebases/{kb_id}/archive`
 
-### Restore KB
-`POST /knowledgebases/{kb_id}/restore` — Undo soft delete
+**Knowledge bases are never deleted.** The row, its content, its notes and its embeddings all
+survive, and the archive is reversible. Nothing is re-indexed and no training is queued.
+Idempotent.
+
+Archiving does **not** pull the KB out of retrieval: assistant versions that already reference
+it keep searching it, the active one included. What changes is that
+
+- **new** references are refused — `409` on playbook create/update, and
+- the KB is **frozen for editing** — `PATCH`, rollback, re-imports and notes answer
+  `409 "… is archived. Unarchive it first."`
+
+An in-use KB archives like any other; there is no "used by" refusal, because archiving changes
+nothing at runtime. To stop an assistant from using a KB, remove the reference from the
+assistant — that is versioned and reversible.
+
+### Un-archive KB
+`POST /knowledgebases/{kb_id}/unarchive`
+
+Brings the KB back to the list (and also revives a legacy pre-sync soft-deleted KB). Idempotent.
+
+`409` when another **live** KB of the project has taken this one's title meanwhile — rename one
+of the two first.
 
 ### Rollback KB
 `POST /knowledgebases/{kb_id}/rollback` — Revert to previous version (EDITED→ACTIVE, ADDED→removed)
+
+`409` on an archived KB — un-archive it first.
+
+### Deprecated aliases
+
+| Deprecated | Use instead |
+|-----------|-------------|
+| `DELETE /knowledgebases/{kb_id}` | `POST /knowledgebases/{kb_id}/archive` |
+| `POST /knowledgebases/{kb_id}/restore` | `POST /knowledgebases/{kb_id}/unarchive` |
+
+They still work so existing integrations don't 404, and they now archive: `DELETE` no longer
+marks the KB DELETED for the next sync to purge its embeddings, and no longer refuses while an
+active assistant uses it.
+
+### Building a KB from a file (upload slots)
+
+A large corpus cannot travel through a JSON request body an agent writes token by token — a
+650 KB catalog is not a payload, it is a transcript. The upload slot is the way around it: you
+negotiate *permission* and get a pointer back, then the bytes go over an ordinary HTTP POST.
+
+**Step 1 — mint a slot.** `POST /projects/{pid}/kb-uploads`
+
+```json
+{"kb_type": "snippets"}
+```
+
+`kb_type` is `snippets` (default), `faq` or `text`, and it is declared **here**, not at consume
+time, so you learn the expected file shape before writing the file. Returns `upload_id`,
+`upload_url`, `upload_headers`, `expires_at`, `max_bytes` (5 MB), `kb_type`, `file_shape` and
+`instructions`. The slot lives 30 minutes.
+
+**Step 2 — upload the file.** `POST /kb-uploads/{upload_id}`
+
+Send the raw file as the body with the `upload_headers` you were given — the `Authorization`
+header is what authorises it, and it is the only credential this step reads. The URL carries
+only a public slot id; the secret travels in a header on purpose, because a secret in a URL
+leaks through access logs, proxies, browser history and `Referer`.
+
+The slot is single-use (the first successful upload closes it), short-lived, size-capped before
+the body is read into memory, scoped to the account and project frozen in at mint time, and
+**write-only** — there is no endpoint that reads a payload back.
+
+Returns `byte_size`, `status` and a **`confirmation_code`, shown once and required for step 3**.
+
+**Step 3 — turn it into a KB.** `POST /projects/{pid}/knowledgebases/from-upload`
+
+```json
+{
+  "upload_id": "…",
+  "confirmation_code": "…",
+  "title": "Product catalog",
+  "description": "What is in it, and when to search it."
+}
+```
+
+The payload is deleted the moment it becomes a knowledge base.
+
+**File shapes**, by `kb_type`:
+
+| `kb_type` | Body |
+|---|---|
+| `snippets` | JSON: a list of `{"title", "content"}` objects. Put every identifier someone might quote (model code, SKU, part number) **in the title** — a catalog lookup resolves entries against titles alone, so an identifier only in the body is unfindable |
+| `faq` | JSON: a list of `{"questions": [...], "answer"}` objects. List the real phrasings people use, not one canonical wording — the phrasings are what match |
+| `text` | The document itself, plain text or Markdown. Not JSON and not a list: a text KB is one body of content, indexed whole |
+
+Max 5,000 items per upload. The `title` still has to be unique among the project's live KBs
+(see below); the 409 raises **before** the slot is marked consumed, so a retry with a different
+title costs no second upload.
+
+**FILE-type KBs** (the binary-blob kind, `POST /projects/{pid}/knowledgebases/file`) are
+dashboard-only and are not covered by this skill.
+
+### Title uniqueness
+
+A KB `title` must not collide with a **non-archived** KB in the same project, compared trimmed
+and case-insensitively. Create and update answer
+`409 "… already exists in this project. Pick another name."`; un-archive answers
+`409 "… Rename one of them before unarchiving."`.
+
+An archived title blocks nothing — that is the point of the shelf. This is an application check,
+not a database constraint: production already holds duplicates from before the rule and they
+keep working.
 
 ---
 
@@ -95,7 +200,7 @@ Sets status to EDITED. FILE KBs cannot be edited (400).
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `include_deleted` | bool | false | Include soft-deleted playbooks |
+| `include_deleted` | bool | false | Include **archived** assistants (`is_deleted` is the archived flag — see [Listing archived assistants](#listing-archived-assistants)) |
 | `include_versions` | bool | false | Include all versions |
 
 ### Get Playbook
@@ -112,9 +217,27 @@ Returns: `id`, `base_id`, `name`, `version_number`, `content` (instructions), `k
   "content": "string (required, instructions)",
   "kb_ids": ["kb_id_1", "kb_id_2"],
   "api_tools": ["tool_id_1"],
+  "enrichment_tool_ids": ["tool_id_1"],
+  "examples": [],
+  "tasks": [],
+  "skip_attachments": false,
+  "handoff_enabled": true,
   "model": "string (optional, e.g. 'gpt-4o-mini')"
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | **Required** |
+| `content` | string | **Required** — the instructions |
+| `kb_ids` | array | Knowledge bases this version can search. Referencing an **archived** KB is a `409` |
+| `api_tools` | array | API tool ids active in this version |
+| `enrichment_tool_ids` | array | Subset of `api_tools` that runs **before every incoming message**, pre-loaded into the system prompt. See [API Tools](#api-tools) |
+| `examples` | array | Global reference conversation examples. Prefer `{{ examples: BLOCK_ID }}` pills — see *Example Blocks* in `SKILL.md` |
+| `tasks` | array | Catalog of proactive tasks. Empty = plain reactive assistant. Which one a conversation pursues is set per conversation, not here |
+| `skip_attachments` | bool | Strip attachments (images, files) before they reach the LLM — for non-vision models, or where attachments are noise. They are still stored on the conversation; only LLM input is filtered. Default `false` |
+| `handoff_enabled` | bool | Whether the assistant can escalate to a human. Default `true`. Seeded into the settings at creation and **editable afterwards via `PATCH /playbooks/{playbook_id}/settings`** |
+| `model` | string | Optional model override (default: the account's model) |
 
 ### Get Latest Playbook Version
 `GET /playbooks/{base_id}/latest`
@@ -131,20 +254,65 @@ Always patches the most recent version. Creates a new version automatically. All
   "name": "string",
   "content": "string (instructions)",
   "kb_ids": ["kb_id_1", "kb_id_2"],
-  "api_tools": ["tool_id_1"]
+  "api_tools": ["tool_id_1"],
+  "enrichment_tool_ids": ["tool_id_1"],
+  "examples": [],
+  "tasks": [],
+  "skills": [],
+  "skip_attachments": false
 }
 ```
+
+Same fields as create, plus `skills` (a full replacement set — see [Skills](#skills)). Every
+list field is a **full replacement**: send it whole, or omit it to keep what is there.
+
+`handoff_enabled` is **not** here — it is a setting, not a property of the version. Change it
+with `PATCH /playbooks/{playbook_id}/settings`; it takes effect on the next turn.
+
+Adding a **newly referenced archived KB** to `kb_ids` answers
+`409 "Cannot use archived knowledge base '…'. Unarchive it first."`. The guard only rejects
+references that are NEW in the request, so an assistant that already points at a shelved KB
+stays editable — you do not have to purge archived ids out of `kb_ids` before every edit.
 
 ### Update Specific Playbook Version
 `PATCH /playbooks/{playbook_id}`
 
 Patches a specific version by ID (useful for intentional rollbacks). Same body as above.
 
-### Delete Playbook
-`DELETE /playbooks/{playbook_id}` — Soft delete
+### Archive Assistant
+`POST /playbooks/{playbook_id}/archive`
 
-### Restore Playbook
-`POST /playbooks/{playbook_id}/restore` — Undo soft delete
+**Assistants are never deleted.** Every version, conversation, skill and eval survives, and the
+archive is reversible. Archiving clears the flag on **every version** of the base_id, not just
+the one you addressed.
+
+> **Archiving does NOT stop production traffic.** Callers hitting
+> `/playbooks/{base_id}/active/chat` keep getting answers — the active-version pointer and the
+> inbox deployments are left untouched on purpose. To actually stop an assistant from
+> answering, use the kill switch: `PATCH /playbooks/{playbook_id}/settings` with
+> `{"is_disabled": true}`.
+
+### Un-archive Assistant
+`POST /playbooks/{playbook_id}/unarchive` — returns the latest version.
+
+Clears the flag on every version of the base_id: a half-restored assistant cannot be pinned to
+an older active version and shows an incomplete version list.
+
+### Listing archived assistants
+
+`is_deleted` **is** the archived flag — the column predates the concept, and
+`GET /projects/{pid}/playbooks?include_deleted=true` is how you list what you archived. The
+dashboard renders its *Archived* badge off exactly that field.
+
+Only the **list** hides an archived assistant. `GET /playbooks/{base_id}/latest` (and every
+other selector) keeps resolving one.
+
+### Deprecated aliases
+
+| Deprecated | Use instead |
+|-----------|-------------|
+| `DELETE /playbooks/{playbook_id}` | `POST /playbooks/{playbook_id}/archive` |
+| `POST /playbooks/{playbook_id}/restore` | `POST /playbooks/{playbook_id}/unarchive` |
 
 ### Rollback Playbook
 `POST /playbooks/{playbook_id}/rollback` — Revert to previous version
@@ -187,6 +355,9 @@ Returns full playbook content for a historical version.
 
 ## Playbook Settings
 
+Settings live on the playbook **base**, not on a version: editing them does NOT cut a new
+assistant version, and the change lands on the next message of every version at once.
+
 ### Get Settings
 `GET /playbooks/{playbook_id}/settings`
 
@@ -195,19 +366,135 @@ Returns null if not configured.
 ### Update Settings
 `PATCH /playbooks/{playbook_id}/settings`
 
-All fields optional:
+All fields optional — only send what you want to change.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `is_disabled` | bool | Kill switch — disables all chat endpoints for this playbook |
+| `handoff_enabled` | bool | Whether the assistant can escalate to a human. Takes effect on the next turn. Turning it OFF does not undo handoffs that already happened |
+| `max_history_turns` | int | Max conversation turns kept in history (null = global default) |
+| `default_messages` | object | Canned replies — see [Default messages](#default-messages) |
+| `url_shortener_enabled` | bool | Whether URL shortening is on |
+| `url_shortener_regex` | string | Regex filtering which URLs to shorten (null = all) |
+| `url_shortener_params` | object | Query params to append: `{customParams: [{key, valueType, value?}]}` |
+| `winback_rules` | array | Follow-up campaigns — see [Follow-ups](#follow-ups-winback-rules) |
+| `winback_webhook_url` | string | LEGACY follow-up transport. Send `""` to clear it and deliver through the channel |
+| `proactive_webhook_url` | string | Bridge route that opens a conversation on the channel and answers with its id (proactive task start) |
+| `task_nudge_delay_minutes` | int | Silence, in minutes, before the assistant follows up on a live **task** |
+| `task_nudge_max` | int | Ceiling on unanswered task follow-ups |
+| `response_pacing` | string | `"none"` \| `"medium"` \| `"long"` (Kaption integration only) |
+| `response_pacing_typing_wait` | bool | Wait for the typing indicator to clear (Kaption integration only) |
+
+Read-only in the response:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `winback_enabled` | bool | **Derived**: true when at least one follow-up rule is enabled. Accepted on write so older clients don't 422, but **ignored** |
+| `has_webhook_secret` | bool | Whether a webhook secret is set (the secret itself is never returned) |
+
+> **`task_nudge_*` is not the same feature as `winback_rules`,** even though the dashboard calls
+> both "follow-ups". Task nudges pace the chasing of a conversation that is pursuing a live
+> **task** — every one is chased, there is nothing to enable, no rules, no tags, no brief.
+> Winback rules are for a **quiet** conversation with no task in flight. Choosing between them:
+> tags / name / schedule / message → `winback_rules`; only how long to wait or how many times →
+> `task_nudge_*`.
+
+### Default messages
+
+Static text for the two situations where there is no agent turn to speak with — the message
+never reached the model (unreadable attachment), or the model could not be reached at all.
 
 ```json
 {
-  "is_disabled": "bool (kill switch)",
-  "url_shortener_enabled": "bool",
-  "url_shortener_regex": "string (regex to filter URLs)",
-  "winback_enabled": "bool",
-  "winback_delay_minutes": "int",
-  "winback_include_tags": ["string"],
-  "winback_exclude_tags": ["string"]
+  "default_messages": {
+    "unsupported_media": {"text": "I can't open videos, but tell me what's in it.", "handoff": false},
+    "unavailable": {"text": "", "handoff": true}
+  }
 }
 ```
+
+Two slots, both optional: `unsupported_media` (the user sent a video, voice note or file the
+assistant cannot read) and `unavailable` (Studio Chat could not answer this turn — kill switch,
+timeout, 5xx). A slot set to `null` means **not configured** and the channel keeps its own
+default, which is what makes this safe to save on a live bridge.
+
+Each slot has two **independent** fields: `text` (max 2000 chars; `""` means say nothing) and
+`handoff` (default `true`). "Say I can't read videos and keep going" and "hand off without a
+word" are both valid — they are not one dropdown.
+
+Unknown keys are rejected (422). A typo like `"message"` or `"escalate"` would otherwise
+validate into a slot that silently means something else.
+
+### Follow-ups (winback rules)
+
+The dashboard calls this feature **Follow-ups** and draws each rule's schedule as a **Rhythm**
+of numbered **attempts**. The wire format still says `winback_*` everywhere — the rename was
+deliberately UI-only, so there is no follow-up endpoint, model or column to look for.
+
+An assistant holds an **ordered list** of rules. The first rule whose tag filter matches a quiet
+conversation owns it; the others ignore it, so a conversation runs exactly one schedule. On the
+first delivered nudge the conversation is stamped with the rule's id, which pins the rest of the
+schedule to that rule even if its tags move afterwards.
+
+```json
+{
+  "winback_rules": [
+    {
+      "id": "3f2b…",
+      "name": "Abandoned checkout",
+      "enabled": true,
+      "include_tags": ["checkout"],
+      "exclude_tags": ["refunded"],
+      "schedule": [{"delay_minutes": 30}, {"delay_minutes": 120}, {"delay_minutes": 1380}],
+      "send_mode": "llm",
+      "send_criteria": "Only if they asked about a product and never got a price.",
+      "message_instructions": "Remind them what they were looking at. Offer to answer questions.",
+      "tag": "followed-up"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Stable id. **Keep it when editing a rule** — conversations mid-campaign are pinned to it |
+| `name` | string | Label for the dashboard and the cron log (max 120) |
+| `enabled` | bool | A disabled rule owns nothing: its conversations fall through to the next rule |
+| `include_tags` | array | OR logic: any match makes the conversation eligible. **Empty means every conversation, not none** |
+| `exclude_tags` | array | Any match blocks the rule. Wins over `include_tags` |
+| `schedule` | array | Ordered attempts, at least one. Each `{delay_minutes: int ≥ 1}` |
+| `send_mode` | string | `"always"` = every conversation the tags let through gets the nudge (no judge, no LLM spend). `"llm"` = a judge decides per conversation |
+| `send_criteria` | string | The judge's rule in your own words. **Replaces** the built-in criteria, which skip conversations that look resolved. Only read when `send_mode: "llm"`; null = built-in |
+| `message_instructions` | string | Brief for the message: what the nudge is for, tone, what to push. Null = built-in generic "did you need more help?" |
+| `tag` | string | Tag the bridge puts on the conversation when it delivers this rule's nudge. Null = the bridge's own default |
+
+**`delay_minutes` is cumulative from the conversation's last REAL message**, not chained off the
+previous nudge: `[30, 120, 1380]` fires at 30 minutes, 2 hours and 23 hours after that anchor.
+
+**Writing the list replaces it whole.** Read it first: order is priority, and a rule you leave
+out is deleted. A rule with no schedule step is refused (422) — it would sit in the list looking
+configured and never fire.
+
+**The dashboard's editor stops at four attempts; the API does not.** You can author a five-step
+rhythm over the API that runs correctly and that the dashboard can shorten but not extend.
+
+#### Will a follow-up actually be delivered?
+
+"The rules are enabled" and "a follow-up will go out" are **not the same claim**. Delivery is a
+property of the **channel**, not of the assistant:
+
+- A follow-up goes out when a registered channel adapter serving this assistant declares the
+  `followup` capability. Check with `GET /accounts/channels` — see [Channels](#channels).
+- The legacy alias `followup` ⇢ `winback` does **not** count: it means the HMAC webhook is in
+  service, not that the adapter's follow-up door exists.
+- If **two** qualifying channels serve the assistant, the resolver refuses to guess and nothing
+  is delivered — platform-native conversation ids collide across platforms, and a mis-guessed
+  channel would nudge a stranger's conversation.
+- `winback_webhook_url` is the legacy transport. While it is set it wins; clear it with `""` to
+  deliver through the channel adapter instead.
+
+To read a rule's `message_instructions` back as an actual sentence before it runs against real
+people, use the preview trigger — see *Preview a follow-up* in the `quality-engineer` skill.
 
 ---
 
@@ -230,7 +517,28 @@ Check `needs_retraining` field in response.
 
 ---
 
-## Schedule
+## Schedule (Office Hours)
+
+There are **two levels**, and they are separate endpoint families:
+
+| Level | Endpoints | Scope |
+|---|---|---|
+| **Project** | `/projects/{pid}/schedule*` | Fallback for every assistant in the project |
+| **Assistant** | `/playbooks/{playbook_id}/schedule*` | Overrides the project schedule for one assistant |
+
+**Resolution, per conversation:** an **enabled** assistant schedule wins; otherwise the project
+schedule; otherwise the assistant is treated as always available.
+
+Two consequences worth designing around:
+
+- **Disabling an assistant schedule does not make the assistant always-available** — it falls
+  back to the project schedule. To make one assistant 24/7 while the project has hours, give it
+  an enabled assistant schedule that is available every day.
+- **Date overrides come from whichever level won.** When an assistant schedule is in effect, the
+  *project's* holidays no longer apply to that assistant — re-create them at the assistant level.
+
+Both levels take the same bodies; the assistant one is keyed by `playbook_id` and resolved to the
+base_id, so it follows the assistant across versions.
 
 ### Get Schedule
 `GET /projects/{pid}/schedule`
@@ -288,6 +596,23 @@ All fields optional:
 ### Delete Date Override
 `DELETE /projects/{pid}/schedule/overrides/{override_id}`
 
+### Per-assistant schedule
+
+Same shapes, keyed by `playbook_id`:
+
+| Method | Endpoint |
+|---|---|
+| `GET` | `/playbooks/{playbook_id}/schedule` — returns `{schedule, date_overrides}`; `schedule` is `null` when none is set |
+| `POST` | `/playbooks/{playbook_id}/schedule` |
+| `PATCH` | `/playbooks/{playbook_id}/schedule` |
+| `DELETE` | `/playbooks/{playbook_id}/schedule` |
+| `GET` | `/playbooks/{playbook_id}/schedule/overrides` |
+| `POST` | `/playbooks/{playbook_id}/schedule/overrides` |
+| `PATCH` | `/playbooks/{playbook_id}/schedule/overrides/{override_id}` |
+| `DELETE` | `/playbooks/{playbook_id}/schedule/overrides/{override_id}` |
+
+Defaults on create: `name` `"Working Hours"`, `timezone` `"UTC"`, `enabled` `true`.
+
 ---
 
 ## API Tools
@@ -341,8 +666,31 @@ All fields optional:
 
 All fields optional — same shape as create.
 
-### Delete API Tool
-`DELETE /projects/{pid}/api-tools/{tool_id}` — Soft delete
+### Archive / un-archive API Tool
+`POST /projects/{pid}/api-tools/{tool_id}/archive`
+`POST /projects/{pid}/api-tools/{tool_id}/unarchive`
+
+**There is no delete, and archiving is not an off switch.** It is organizational: the tool leaves
+this project's list and the pickers so nobody reaches for it again. **Every assistant that
+already references it keeps calling it, unchanged** — its `{{ tool(ID) }}` pill keeps expanding
+and enrichment pre-runs still fire. Nothing is removed: the definition, its usage analytics,
+alert overrides and async operations all stay, and every playbook version keeps the tool id,
+which is what makes un-archiving reversible. Both directions are idempotent.
+
+To make an assistant stop using a tool, remove the reference **from the assistant** — that
+creates a new version and can be rolled back.
+
+Admin-only, **no approval gate** in either direction, because nothing about live behaviour
+changes. (Editing or renaming a tool still reaches live behaviour and keeps its gate.)
+
+`DELETE /projects/{pid}/api-tools/{tool_id}` is a **deprecated alias** of archive (204). It has
+never hard-deleted.
+
+`GET /projects/{pid}/api-tools?include_archived=true` lists archived tools; by `tool_id` an
+archived tool always resolves, carrying `is_archived: true` and `archived_at`.
+
+A tool `name` must be unique among the project's **live** tools — `409` otherwise, on create,
+rename and un-archive. An archived name blocks nothing.
 
 ---
 
@@ -489,7 +837,8 @@ All fields optional:
 ```
 
 ### Delete Alert
-`DELETE /alerts/{alert_id}` — Soft delete (204). Requires human user.
+`DELETE /alerts/{alert_id}` — 204. **Immediate and not approval-gated**, and `sbs_` keys can
+call it. Confirm with the user before deleting.
 
 ### Test Run Alert
 `POST /alerts/{alert_id}/test`
@@ -552,8 +901,8 @@ Returns: `AlertRun`
 ## Monitors
 
 Aggregate-style triggers (count of conversations matching a filter) evaluated on a cron
-schedule. Read endpoints, mutations, preview, and test all accept `sbs_` keys directly.
-Delete needs a human reviewer — `sbs_` callers get a **202** with an approval id.
+schedule. **Every** endpoint here — reads, mutations, preview, test and delete — accepts `sbs_`
+keys and executes directly. Nothing about monitors is approval-gated.
 
 ### Preview Monitor
 `POST /projects/{pid}/monitors/preview`
@@ -642,17 +991,9 @@ Creates a disabled clone named `copy-{original.name}` under the same account. Re
 ### Delete Monitor
 `DELETE /monitors/{monitor_id}` — 204 on success.
 
-For sandbox (`sbs_`) callers the request is queued for human approval and returns:
-
-```json
-{
-  "approval_id": "uuid",
-  "status": "pending",
-  "description": "Delete monitor {monitor_id}",
-  "message": "Request queued for admin approval."
-}
-```
-(HTTP 202.)
+**Immediate, including for `sbs_` keys — there is no approval queue on this.** It is a soft
+delete (the row is flagged, not dropped), but no endpoint exposes a restore, so treat it as
+final and confirm with the user before calling it.
 
 ### Test Run Monitor
 `POST /monitors/{monitor_id}/test`
@@ -932,10 +1273,31 @@ Creates a new playbook version with the skill added.
   "description": "Handle refund requests for orders",
   "trigger": "Handle refund requests for orders",
   "content": "## Refund Process\n1. Ask for order number\n2. Verify return window",
+  "examples": [],
   "is_active": true,
-  "order": 0
+  "order": 0,
+  "always_load": false,
+  "enable_condition": null
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | **Required.** Kebab-case identifier, max 100 |
+| `description` | string | **Required.** Max 1024. **This is what the runtime reads to decide whether to load the skill** |
+| `trigger` | string | **Required.** Max 2048. **Dashboard display only — never compiled into the prompt.** Put the "when to use" in `description` too, or the skill will not load |
+| `content` | string | **Required.** Full instructions; supports template macros |
+| `examples` | array | Reference conversation examples. Prefer `{{ examples: BLOCK_ID }}` pills |
+| `is_active` | bool | Default `true` |
+| `order` | int | Display / listing order |
+| `always_load` | bool | Inline the full content into the **static system prompt** instead of loading it on demand. Default `false` — see below |
+| `enable_condition` | object | Structured condition evaluated per turn against the live conversation context. `null` = unconditional |
+
+**`always_load`** is for skills used in most conversations: their tokens join the
+cross-conversation prompt-cache prefix (read at ~0.1x price by every conversation) and the
+`load_skill` round-trip disappears. It only applies while the skill is enabled for the turn
+(`is_active` **and** `enable_condition` both pass). The tools and KBs an always-loaded skill
+references are visible from turn zero and are never gated behind a `load_skill` event.
 
 ### Update a skill
 
@@ -946,9 +1308,13 @@ Creates a new playbook version with the skill modified. All fields optional.
 ```json
 {
   "description": "Updated description",
-  "content": "Updated instructions..."
+  "content": "Updated instructions...",
+  "always_load": true
 }
 ```
+
+Send `"enable_condition": null` explicitly to **clear** a previously-set condition — omitting
+the field keeps the stored one.
 
 ### Delete a skill
 
@@ -1041,6 +1407,140 @@ All item types support notes: FAQ (`faq_items[].id`), Snippets (`snippet_items[]
 - Notes override the original content for the LLM
 
 ---
+
+## API Tool Alerts
+
+Watches API tools for error spikes and notifies Slack / email. Separate from
+[Alerts](#alerts) (an LLM reading a conversation window) and [Monitors](#monitors) (a SQL count
+over conversations): this one counts **API tool failures**.
+
+There is a **project default** plus optional **per-tool overrides**. The default applies to every
+tool unless that tool has an override row.
+
+### Get / set the project default
+`GET /projects/{pid}/api-tool-alerts/default` — returns `null` if never configured.
+
+`PUT /projects/{pid}/api-tool-alerts/default`
+
+```json
+{
+  "is_enabled": true,
+  "error_threshold": 5,
+  "window_minutes": 30,
+  "cron_expression": "*/10 * * * *",
+  "slack_channel": "#alerts",
+  "email_recipients": ["ops@example.com"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `is_enabled` | bool | **Master switch — default config only.** When false, no API-tool alert fires anywhere in the project |
+| `error_threshold` | int ≥ 1 | Absolute error count that triggers the alert |
+| `window_minutes` | int ≥ 1 | Lookback window in minutes (e.g. 15, 30, 60) |
+| `cron_expression` | string | When to evaluate. Default `*/10 * * * *`; **minimum cadence is 10 minutes** — the external cron runs every 10 min, so anything tighter is refused |
+| `slack_channel` | string | Slack channel to notify |
+| `email_recipients` | array | Email recipients |
+
+### Per-tool override
+`GET /projects/{pid}/api-tools/{api_tool_id}/alert` — the **effective** config for that tool
+(the override if there is one, otherwise the default).
+
+`PUT /projects/{pid}/api-tools/{api_tool_id}/alert` — same body **without `is_enabled`**.
+
+`DELETE /projects/{pid}/api-tools/{api_tool_id}/alert` — drop the override; the tool falls back
+to the project default.
+
+> **Overrides have no off-switch, by product decision.** To mute one tool, set a very high
+> `error_threshold`. Only the project default has `is_enabled`.
+
+### Runs and live status
+`GET /projects/{pid}/api-tool-alerts/runs` — paginated history (`limit` default 50, `offset`).
+
+`GET /projects/{pid}/api-tool-alerts/status` — runs the evaluator **on demand**: no run is
+persisted and no notifications are sent. This is the "what would fire right now" read.
+
+`POST /projects/{pid}/api-tool-alerts/test` — a real test run: persists a run and **does** send
+the Slack/email notifications.
+
+---
+
+## Saved Filters
+
+A saved filter is a named **tag expression** stored per account, so a workspace can save a combo
+it applies repeatedly in the ChatLog and dashboards (`escalado AND vip AND NOT resolved`) and
+pick it from a list instead of rebuilding it.
+
+Account-scoped and shared across every assistant. **UI presets only — no effect on assistant
+behaviour**, so sandbox tokens write directly and nothing is queued for approval.
+
+| Method | Endpoint |
+|---|---|
+| `GET` | `/saved-filters` |
+| `GET` | `/saved-filters/{saved_filter_id}` |
+| `POST` | `/saved-filters` |
+| `PATCH` | `/saved-filters/{saved_filter_id}` |
+| `DELETE` | `/saved-filters/{saved_filter_id}` |
+
+```json
+{
+  "name": "Escalated VIPs",
+  "description": "Optional free text",
+  "definition": {
+    "type": "group",
+    "op": "and",
+    "children": [
+      {"type": "tag", "value": "escalado"},
+      {"type": "tag", "value": "vip"},
+      {"type": "tag", "value": "resolved", "negate": true}
+    ]
+  }
+}
+```
+
+`name` is a free-form display label, unique per account (max 100) — unlike a segment, it is
+never referenced by name.
+
+**`definition` is a `TagExpr`** — the same AST the `tag_filter` query param accepts on the
+conversation and analytics endpoints, so a saved filter can be applied to any of those views:
+
+- Leaf: `{"type": "tag", "value": "…", "negate": false}`
+- Group: `{"type": "group", "op": "and" | "or", "children": [...]}`
+
+Bounds: max depth 6, max 64 nodes.
+
+> **Saved filters filter by tag; segments are conditions over context and gate skills.**
+> Different features, different ASTs — don't mix them up. Segments are documented in the
+> `builder` skill's `SKILL.md`.
+
+---
+
+## Channels
+
+A channel is a deployed **bridge adapter** (Intercom, Zendesk, Bird, Pylon, Kommo, Bitrix…) that
+fronts a messaging platform for one account. The row itself only stores the adapter's URL —
+everything else (platform, inboxes, which assistant answers which inbox, health) is fetched live
+from the adapter when you ask.
+
+**Read-only over the API.** Pairing an adapter and unpairing it (`POST /accounts/channels`,
+`POST /accounts/channels/discover`, `DELETE /accounts/channels/{id}`) are dashboard-only:
+registering a channel is the act of putting a bridge into production traffic.
+
+| Method | Endpoint | Returns |
+|---|---|---|
+| `GET` | `/accounts/channels` | Every channel with its manifest, fetched live and concurrently. An adapter that does not answer comes back with `ok: false` and the reason |
+| `GET` | `/accounts/channels/{channel_id}/manifest` | One adapter's manifest |
+| `GET` | `/accounts/channels/{channel_id}/config` | One channel's wiring |
+| `GET` | `/accounts/channels/{channel_id}/status` | The adapter's live checks and counters. `?refresh=1` bypasses the adapter's own 30-second cache |
+
+Each row carries **`capabilities`** (what the adapter declares it can do) and
+**`assistant_base_ids`** (which assistants its inboxes route to).
+
+**This is how you answer "will this assistant's follow-ups actually be delivered".** See
+[Follow-ups](#follow-ups-winback-rules): a follow-up goes out only when a registered adapter
+serving the assistant declares the `followup` capability. The legacy alias `winback` does not
+count, and two qualifying channels mean nothing is delivered (the resolver refuses to guess).
+
 
 ## Approvals
 
