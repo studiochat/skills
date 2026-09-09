@@ -1,6 +1,6 @@
 # Studio Chat Agent Skills
 
-Skills for [Claude Code](https://claude.ai/code) and other AI agents that follow the [Agent Skills](https://agentskills.io/) specification.
+Skills for [Claude Code](https://claude.ai/code), Claude Desktop, Codex CLI, OpenCode, Gemini CLI and any other agent that follows the [Agent Skills](https://agentskills.io/) specification.
 
 These skills give AI agents deep expertise in analyzing and managing [Studio Chat](https://studiochat.io) projects — the AI-powered customer experience platform.
 
@@ -47,6 +47,7 @@ differently:
 | **Claude Code** | Filesystem — copy the folder | **Yes.** Skills get the same network access as any program on your machine |
 | **Claude Desktop / claude.ai** | Upload a `.zip` in settings | **Yes, if network egress allows `api.studiochat.io`** — see below |
 | **Claude API** (`/v1/skills`) | Upload via the Skills API | **No.** API skills run in a container with **no network access at all** |
+| **Codex CLI, OpenCode, Gemini CLI** | Filesystem — copy the folder | **Yes.** Local CLIs, full network access |
 | **Other agents** | Copy the folder | Depends on the agent |
 
 Skills do **not** sync across surfaces. Install them separately wherever you want them.
@@ -129,11 +130,50 @@ network access and no runtime package installation, so a skill whose entire job 
 If you are building on the API, call the Studio Chat REST API directly — the `references/`
 directory in each skill is a complete, current endpoint reference you can use as the specification.
 
+### Codex CLI, OpenCode, Gemini CLI
+
+`SKILL.md` is an open, cross-agent format, so these skills work unchanged in any agent that
+implements it. All three are local CLIs, so — like Claude Code — they get normal network access
+and read `STUDIO_API_TOKEN` from your shell. No zip, no upload, no domain allow-list.
+
+**`.agents/skills/` is the interoperable path**: Codex CLI, OpenCode and Gemini CLI all read it.
+Install there once and every one of them picks the skills up.
+
+```bash
+# Personal — works in Codex CLI, OpenCode and Gemini CLI at once
+mkdir -p ~/.agents/skills
+cp -r skills/* ~/.agents/skills/
+
+# Or per-repository, committed for the team
+mkdir -p .agents/skills && cp -r skills/* .agents/skills/
+```
+
+Per-tool paths, if you'd rather be explicit:
+
+| Tool | Personal | Repository |
+|---|---|---|
+| **Codex CLI** | `~/.agents/skills/` | `.agents/skills/` |
+| **OpenCode** | `~/.config/opencode/skills/`, `~/.claude/skills/`, `~/.agents/skills/` | `.opencode/skills/`, `.claude/skills/`, `.agents/skills/` |
+| **Gemini CLI** | `~/.gemini/skills/` or `~/.agents/skills/` | `.gemini/skills/` or `.agents/skills/` |
+
+**OpenCode reads Claude Code's directories directly**, so if you already installed into
+`~/.claude/skills/` there is nothing more to do.
+
+Discovery works the same everywhere: the agent sees each skill's `name` and `description`, and
+loads the body only when your request matches. Codex also takes an explicit `$skill-name`.
+
+Note that `AGENTS.md` and `GEMINI.md` are a different mechanism — always-on repository
+conventions, loaded into every request. These skills are the opposite: on-demand expertise that
+stays out of context until it is needed. Don't paste them into `AGENTS.md`.
+
 ### Other agents
 
 Each skill is a self-contained directory with a `SKILL.md` entry point plus `scripts/` and
-`references/`. Copy the folder into your agent's skill directory. The scripts are stdlib-only
-Python 3 with no dependencies to install.
+`references/`. Copy the folder into your agent's skill directory.
+
+The frontmatter carries `name` and `description` on every skill, `name` matches the directory
+name, and the scripts are stdlib-only Python 3 with nothing to install — which is what the
+stricter loaders check for.
 
 ## Authentication
 
