@@ -38,21 +38,102 @@ Create and configure automated reports — scheduled or one-off — including in
 
 ## Installation
 
+These skills are **HTTP clients** — every one of them works by calling `https://api.studiochat.io`.
+That single fact decides where they can run, because each Claude surface sandboxes network access
+differently:
+
+| Surface | How skills are installed | Works with these skills? |
+|---|---|---|
+| **Claude Code** | Filesystem — copy the folder | **Yes.** Skills get the same network access as any program on your machine |
+| **Claude Desktop / claude.ai** | Upload a `.zip` in settings | **Yes, if network egress allows `api.studiochat.io`** — see below |
+| **Claude API** (`/v1/skills`) | Upload via the Skills API | **No.** API skills run in a container with **no network access at all** |
+| **Other agents** | Copy the folder | Depends on the agent |
+
+Skills do **not** sync across surfaces. Install them separately wherever you want them.
+
 ### Claude Code
 
+Filesystem-based, no upload and no packaging.
+
 ```bash
-# Copy the skills you want into your skills directory
+# Personal — available in all your projects
 cp -r skills/builder ~/.claude/skills/
 cp -r skills/data-expert ~/.claude/skills/
+
+# Or per-project, committed so your team gets them
+mkdir -p .claude/skills && cp -r skills/* .claude/skills/
 ```
 
-### Claude.ai
+You can also point Claude Code at a checkout of this repo without copying anything:
 
-Upload the `SKILL.md` file from any skill folder to your project knowledge.
+```bash
+claude --add-dir /path/to/studiochat-skills
+```
 
-### Other Agents
+Claude loads a skill automatically when your request matches its `description`, or you can invoke
+one directly with `/builder`, `/data-expert`, and so on.
 
-Each skill is a self-contained directory with a `SKILL.md` entry point. Copy the skill folder into your agent's skill/tool directory.
+### Claude Desktop and claude.ai
+
+Same account, same settings — the steps below cover both.
+
+**1. Turn on code execution.** Skills do not appear at all without it.
+
+- Free / Pro / Max: **Settings → Capabilities → Code execution and file creation**
+- Team / Enterprise: an owner enables **Organization settings → Skills**, both *Code execution and
+  file creation* **and** *Skills*
+
+**2. Package each skill as its own zip.** The skill folder must be the **root** of the archive, not
+nested inside another folder:
+
+```bash
+cd skills
+zip -r builder.zip builder -x '*__pycache__*' '*.DS_Store'
+zip -r data-expert.zip data-expert -x '*__pycache__*' '*.DS_Store'
+# …one zip per skill you want
+```
+
+**3. Upload.** Go to **Customize → Skills** (on some builds, **Settings → Features**), click **+**,
+then **Create skill**, and upload the zip. The skill appears in your list with a toggle.
+
+**4. Allow the API domain.** This is the step that actually decides whether they work:
+
+| Plan | Default network egress | What you need to do |
+|---|---|---|
+| Free / Pro / Max | All domains | Nothing — it works |
+| **Team** | **Package managers only** | An owner must allow `api.studiochat.io` in **Organization settings → Capabilities** |
+| **Enterprise** | **Disabled** | An owner must enable network egress *and* allow `api.studiochat.io` |
+
+Without that, the scripts fail on every call with a connection error, even though the skill loads
+and looks fine.
+
+**5. Supply credentials.** There are no environment variables in this sandbox, so `STUDIO_API_TOKEN`
+and `STUDIO_PROJECT_ID` cannot be preset the way they can in a terminal. Export them at the start of
+the conversation and they persist for that conversation's container:
+
+> Run `export STUDIO_API_TOKEN="sbs_…"` and `export STUDIO_PROJECT_ID="…"`, then use the builder
+> skill to…
+
+Treat that conversation as holding a live credential.
+
+**Two limits worth knowing:** an uploaded skill is **private to your own account** — each teammate
+uploads their own copy, and claude.ai has no org-wide distribution for custom skills. And a skill
+uploaded here is not available in Claude Code or the API.
+
+### Claude API
+
+**Not supported.** Skills uploaded through the Skills API run in a sandboxed container with no
+network access and no runtime package installation, so a skill whose entire job is calling
+`api.studiochat.io` cannot function there.
+
+If you are building on the API, call the Studio Chat REST API directly — the `references/`
+directory in each skill is a complete, current endpoint reference you can use as the specification.
+
+### Other agents
+
+Each skill is a self-contained directory with a `SKILL.md` entry point plus `scripts/` and
+`references/`. Copy the folder into your agent's skill directory. The scripts are stdlib-only
+Python 3 with no dependencies to install.
 
 ## Authentication
 
@@ -79,6 +160,10 @@ Once you have a key, set the environment variables before using the skills:
 export STUDIO_API_TOKEN="sbs_your_api_key_here"
 export STUDIO_PROJECT_ID="your-project-uuid"
 ```
+
+In Claude Desktop / claude.ai there is no shell to export from ahead of time — ask Claude to run
+those two exports as the first step of the conversation instead, and they hold for the rest of it.
+See [Installation](#claude-desktop-and-claudeai).
 
 ### What a key can do
 
