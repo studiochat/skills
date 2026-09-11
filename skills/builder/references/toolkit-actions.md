@@ -353,7 +353,7 @@ that a video arrived and calls the tool, which downloads and evaluates the file.
 
 | Action | What it does | Key params |
 |---|---|---|
-| **`VIDEO_ANALYSIS_EVALUATE_VIDEO`** | Downloads the video and returns `meets_criteria` (bool), `confidence` (0–1), `summary`, `transcript` (verbatim speech), `observations[]`, `failed_checks[]`, plus `video.{source, media_type, size_bytes, filename}`. Read-only; the same video + criterion within a minute returns the cached verdict. | `criteria` (required; pin the checklist per use case — `hintable`, context templates such as `{{deps.first_name}}` allowed — or leave it to the assistant when the skill text already spells out the phrase) · `video_url` (optional; **leave it out** to evaluate the most recent video the person sent in the conversation — the normal case; pin a URL or `{{deps.*}}` template only when the video lives elsewhere) |
+| **`VIDEO_ANALYSIS_EVALUATE_VIDEO`** | Downloads the video and returns `meets_criteria` (bool), `confidence` (0–1), `summary`, `transcript` (verbatim speech), `observations[]`, `failed_checks[]`, plus `video.{source, media_type, size_bytes, filename}`. Read-only; the same video + criterion within a minute returns the cached verdict. | `criteria` (required; pin the checklist per use case — `hintable`, context templates such as `{{deps.first_name}}` allowed — or leave it to the assistant when the skill text already spells out the phrase). **The video is not a param**: the tool always takes the most recent video the person sent in the conversation — several sent → only the latest; none → a `no_video` error and the assistant asks for it. |
 
 **Config shapes:**
 
@@ -380,7 +380,7 @@ Notes:
   as the user message mentions an attached video.
 - Error results carry a `code`: `no_video` (nothing in the conversation — ask the person to send
   the video as a file), `video_unavailable` (expired/unreachable link), `video_too_large`
-  (default cap 50 MB), `not_a_video`, `not_configured` (the platform has no model key),
+  (default cap 20 MB), `not_a_video`, `not_configured` (the platform has no model key),
   `analysis_failed` (the model refused or errored). The instructions should tell the assistant
   what to say to the user for each.
 - Never let the instructions describe the video's content or declare a pass/fail without the
