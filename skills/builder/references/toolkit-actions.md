@@ -3,7 +3,7 @@
 Toolkit actions let an assistant *do* things in a third-party system mid-conversation:
 create a support ticket, close the conversation, set attributes, post to Slack, add an entry
 to a Notion database, append or look up a row in a Google Sheet, check availability and
-book a meeting on Cal.com. This reference covers
+book a meeting on Cal.com, evaluate a video the person sent against a criterion. This reference covers
 **every** toolkit action Studio Chat supports and how to make an assistant use it from its
 instructions.
 
@@ -341,6 +341,56 @@ Notes:
 **In instructions:** *"Before answering pricing questions, check the beta whitelist with
 `{{ custom_tool: find_row_c4d2e }}`; if `found` is false, offer the waitlist and register them
 with `{{ custom_tool: add_row_88a1b }}`."*
+
+### Video Analysis — `VIDEO_ANALYSIS` (toggle — platform-managed model)
+Evaluate a video the person sent — a verification selfie, a proof of something — against a
+criterion the operator writes, with a model that **watches and listens** to the video (the
+audio track counts: "says the phrase with today's date" is checkable). No customer credentials:
+the customer just **enables** the toolkit. Videos reach the assistant through the channel as
+`{type: "video", url}` attachments (the bridge must have video forwarding on — an Intercom
+deployment sets `forward_video: true` on the assistant); the chat model sees a one-line note
+that a video arrived and calls the tool, which downloads and evaluates the file.
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`VIDEO_ANALYSIS_EVALUATE_VIDEO`** | Downloads the video and returns `meets_criteria` (bool), `confidence` (0–1), `summary`, `transcript` (verbatim speech), `observations[]`, `failed_checks[]`, plus `video.{source, media_type, size_bytes, filename}`. Read-only; the same video + criterion within a minute returns the cached verdict. | `criteria` (required; pin the checklist per use case — `hintable`, context templates such as `{{deps.first_name}}` allowed — or leave it to the assistant when the skill text already spells out the phrase) · `video_url` (optional; **leave it out** to evaluate the most recent video the person sent in the conversation — the normal case; pin a URL or `{{deps.*}}` template only when the video lives elsewhere) |
+
+**Config shapes:**
+
+```json
+// One pill per flow — the criterion is what makes each pill distinct
+{
+  "params": {
+    "criteria": "Selfie video: la persona muestra su rostro y su documento de identidad de forma legible, y dice en voz alta: \"Acme, hoy <fecha de hoy>, solicito restaurar mi clave PIN\". La fecha dicha tiene que ser la de hoy."
+  }
+}
+
+// One pill for several flows — the assistant writes the criterion from the skill's phrase
+{
+  "params": {
+    "__param_hints__": "<base64 of {\"criteria\": \"Copy the exact phrase and video rules from the skill you are following; include today's date.\"}>"
+  }
+}
+```
+
+Notes:
+- **Evaluate in the turn the video arrives.** Channel links (Intercom) expire ~30 minutes after
+  the video is sent; a later call returns `{"error": …, "code": "video_unavailable"}` and the
+  assistant must ask for the video again. Write the instructions so the tool is called as soon
+  as the user message mentions an attached video.
+- Error results carry a `code`: `no_video` (nothing in the conversation — ask the person to send
+  the video as a file), `video_unavailable` (expired/unreachable link), `video_too_large`
+  (default cap 50 MB), `not_a_video`, `not_configured` (the platform has no model key),
+  `analysis_failed` (the model refused or errored). The instructions should tell the assistant
+  what to say to the user for each.
+- Never let the instructions describe the video's content or declare a pass/fail without the
+  tool — the chat model cannot see the file; `meets_criteria` decides and `failed_checks`
+  explains what is missing.
+
+**In instructions:** *"When the user sends the verification video, check it with
+`{{ custom_tool: evaluate_video_pin_5f2a1 }}`. If `meets_criteria` is true, hand off to a human
+with the reason 'Restauración de PIN'; if false, tell the user which checks failed
+(`failed_checks`) and ask for a new video."*
 
 ### Kommo — `KOMMO` (api_key: subdomain + access_token)
 Update the Kommo (amoCRM) **lead behind the current conversation**. Credentials: the account

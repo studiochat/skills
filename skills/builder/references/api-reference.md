@@ -697,7 +697,7 @@ rename and un-archive. An archived name blocks nothing.
 ## Custom Toolkits & Tool Configurations (Pills)
 
 Toolkit actions (Intercom Tickets/Conversations, Slack, Zendesk, Pylon, GU1, Notion Databases,
-Google Sheets, Cal.com) are wired into instructions as **pills**: `{{ custom_tool: short_name }}`, each
+Google Sheets, Cal.com, Kommo, Video Analysis) are wired into instructions as **pills**: `{{ custom_tool: short_name }}`, each
 backed by a **tool configuration** (one action with its params pinned / assistant-decided /
 context-driven). See [`toolkit-actions.md`](./toolkit-actions.md) for the conceptual guide +
 full action catalog. All of these accept the project (`sbs_`) token.

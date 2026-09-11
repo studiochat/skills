@@ -2,7 +2,7 @@
 name: builder
 description: >
   Build and configure Studio Chat assistants — instructions, knowledge bases, skills, tasks, example blocks,
-  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets, Cal.com, Kommo), alerts, schedules, and trending topics. Use when asked
+  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets, Cal.com, Kommo, Video Analysis), alerts, schedules, and trending topics. Use when asked
   to create, update, or manage any aspect of an assistant's configuration, including writing the
   proactive tasks an assistant is assigned (with their {{success}} / {{failure}} outcome pills) and
   wiring up the template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
@@ -1151,7 +1151,7 @@ tool (which the builder creates outright), a toolkit must be **connected by the 
 credentials before its actions can be used.
 
 > **Full catalog of every toolkit action** — Intercom Tickets/Conversations, Slack, Zendesk, Pylon,
-> GU1, Notion Databases, Google Sheets, Cal.com, Kommo — and how to configure each and wire it into instructions is in
+> GU1, Notion Databases, Google Sheets, Cal.com, Kommo, Video Analysis — and how to configure each and wire it into instructions is in
 > [`references/toolkit-actions.md`](./references/toolkit-actions.md). It also covers the Intercom
 > ticket **Motivo/Submotivo taxonomy** (the most error-prone part), the Google Sheets
 > **access-check flow** (verify the sheet is shared with the service account BEFORE configuring),
@@ -1171,10 +1171,11 @@ credentials before its actions can be used.
 Both expose the same `SLACK_SEND_MESSAGE` action with the same params — only the registry slug differs. In Step 1 check which one is `is_connected: true` and use **that** slug in the metadata paths below. A project typically has one or the other, not both.
 
 > The other toolkits (Intercom Tickets/Conversations, Zendesk, Pylon, GU1, Notion Databases,
-> Google Sheets, Cal.com, Kommo) follow the same connect → discover → configure pattern — each action, its params,
+> Google Sheets, Cal.com, Kommo, Video Analysis) follow the same connect → discover → configure pattern — each action, its params,
 > and how to wire it into instructions is documented in
-> [`references/toolkit-actions.md`](./references/toolkit-actions.md). Google Sheets is the one
-> twist: it's enabled with no credentials, and each spreadsheet must pass the `sheet_access`
+> [`references/toolkit-actions.md`](./references/toolkit-actions.md). Google Sheets and Video
+> Analysis are enabled with no credentials (a toggle); Google Sheets is the one
+> twist beyond that: each spreadsheet must pass the `sheet_access`
 > check (shared as Editor with the service account) before you configure a pill against it.
 
 ### The workflow (run this whenever the user asks for "send a Slack message")
