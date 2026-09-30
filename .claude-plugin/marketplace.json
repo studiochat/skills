@@ -1,0 +1,32 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "studiochat",
+  "description": "Studio Chat skills for building, analyzing, testing and reporting on your AI assistants",
+  "owner": {
+    "name": "Studio Chat",
+    "email": "hey@studiochat.io",
+    "url": "https://studiochat.io"
+  },
+  "plugins": [
+    {
+      "name": "studiochat",
+      "displayName": "Studio Chat",
+      "source": "./",
+      "description": "Build, analyze, test and report on Studio Chat assistants: configuration, conversation analytics, evals and scheduled reports",
+      "author": {
+        "name": "Studio Chat",
+        "url": "https://studiochat.io"
+      },
+      "homepage": "https://github.com/studiochat/skills",
+      "repository": "https://github.com/studiochat/skills",
+      "keywords": [
+        "studiochat",
+        "customer-support",
+        "ai-agents",
+        "analytics",
+        "evals"
+      ],
+      "category": "productivity"
+    }
+  ]
+}

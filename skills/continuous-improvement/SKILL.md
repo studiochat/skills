@@ -14,6 +14,10 @@ description: >
 
 # Continuous Improvement
 
+> **Script paths:** this skill has no scripts of its own. Where it runs `../builder/scripts/api.py`,
+> that path is relative to this skill's folder and needs the `builder` skill installed next to it
+> (the plugin install does this for you).
+
 Ship a behaviour change to an assistant: add or change a policy in the instructions or
 the casuísticas (skills), validate it without polluting version history, push it through
 the approval gate, and close the loop with eval coverage. All API calls are authenticated
@@ -199,7 +203,7 @@ hand-off. When the change is validated, **push it via [builder](../builder/SKILL
 
 **Every instruction or skill modification you push generates an approval — one per change —
 that a human must approve before it goes live.** Sandbox (`sbs_`) callers get a `202` with
-`{"approval_id": "...", "status": "pending", "message": "Request queued for admin approval."}`
+`{"approval_id": "...", "approval_url": "https://…", "status": "pending", "message": "..."}`
 instead of an immediate write. So:
 
 - Push **one change per logical edit** so each approval is reviewable on its own (don't bundle a
@@ -208,7 +212,8 @@ instead of an immediate write. So:
   payload, and it **renders as Markdown**, so make it structured and skimmable:
 
   ```bash
-  python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
+  # builder's API client — this skill has no scripts of its own
+  python3 ../builder/scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
     "description": "Resumen en una línea.\n\n## Qué cambia\n...\n\n## Por qué\n... (números/evidencia)\n\n## Impacto y riesgo\n..."
   }'
   ```
@@ -218,6 +223,8 @@ instead of an immediate write. So:
   policy being added/changed, what motivated it (the user ask, the trend, the conversation
   with real numbers), and the observable before → after. For text edits, embed a
   `[[before]]/[[after]]` diff block (see the builder skill). Pending-only (409 once reviewed).
+- **Give the user the `approval_url`** from each 202 — it opens that approval directly in the
+  dashboard.
 - **Confirm each change with the user before pushing it** (builder confirms every write anyway),
   then **wait for the human to approve** the queued change(s) and for the **new version to go
   live**. Get the new version ID.

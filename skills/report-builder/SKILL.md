@@ -9,6 +9,10 @@ description: >
 
 # Report Builder
 
+> **Script paths** like `scripts/reports.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/reports.py …`.
+
 Create, configure, and manage automated reports via the Studio Chat Reports API. Reports are executed by SAMI in a sandbox with the `data-expert` skill — this skill focuses on *defining* reports, not executing them.
 
 ## Key Terminology
@@ -57,6 +61,12 @@ python3 scripts/reports.py runs <report_id>
 
 # Get run status and logs
 python3 scripts/reports.py run-status <run_id>
+
+# One-off: define and run in a single call (not listed, no schedule, nothing to clean up)
+python3 scripts/reports.py one-off --instructions "..." [--hours 24 | --window 7] [--playbooks BASE_ID]
+
+# Download the PDF of a completed run
+python3 scripts/reports.py pdf <run_id> [-o report.pdf]
 ```
 
 ## Important: Do Not Run Unless Asked
@@ -105,15 +115,16 @@ python3 scripts/reports.py run-status RUN_ID
 > `time_window_hours`, which is how people actually phrase it ("the last 24 hours").
 >
 > ```bash
-> python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/reports/one-off" -X POST --body '{
->   "instructions": "What came in over the last 24 hours, and why did it hand off?",
->   "time_window_hours": 24,
->   "playbook_base_ids": ["BASE_ID"]
-> }'
+> python3 scripts/reports.py one-off \
+>   --instructions "What came in over the last 24 hours, and why did it hand off?" \
+>   --hours 24 --playbooks BASE_ID
+> # Poll, then download the PDF
+> python3 scripts/reports.py run-status RUN_ID
+> python3 scripts/reports.py pdf RUN_ID -o report.pdf
 > ```
 >
 > Returns `202` with `{report, run}`. Poll the run, then collect the PDF from
-> `/reports/runs/{run_id}/pdf`. See
+> `/reports/runs/{run_id}/pdf` (`reports.py pdf`). See
 > [the API reference](references/api-reference.md#one-off-report-define-and-run-in-one-call).
 >
 > Use `create` + `run` only when the user wants the definition to **stay**.

@@ -357,8 +357,12 @@ Triggers an evaluation run in the background. Returns immediately with a pending
 | `case_ids` | array | No | Explicit list of case IDs to run. When set, ONLY these cases execute and `is_enabled` is IGNORED — pick a subset (or a disabled case) without flipping flags. Unset ⇒ run every enabled case. Empty list ⇒ 400. Unknown IDs ⇒ 404. |
 | `concurrency` | int | No | Cases to run in parallel (1..5, default 1). `1` = sequential. Higher fans out via a thread pool; beyond 5 rate limits dominate. |
 | `model` | string | No | Override the **assistant** model for this run. See [Model strings](#model-strings) below. |
-| `simulator_model` | string | No | Override the simulator LLM. Default: `EVAL_SIMULATOR_MODEL` env (typically `anthropic/claude-sonnet-4`). |
-| `judge_model` | string | No | Override the LLM judge for `text`-type assertions. Structured assertions ignore this. Default: `EVAL_EVALUATOR_MODEL` env (typically `openai/gpt-4o`). |
+| `simulator_model` | string | No | Override the simulator LLM. Default: the platform's eval default. |
+| `judge_model` | string | No | Override the LLM judge for `text`-type assertions. Structured assertions ignore this. Default: the platform's eval default. |
+| `judge_mode` | string | No | Which judge decides `text` assertions: `llm` (LLM judge only), `jev_then_llm` (a fast classifier settles confident passes, everything else goes to the LLM judge), `shadow` (LLM decides, jev scores recorded). Unset ⇒ `jev_then_llm` where available, else `llm`. A jev mode where jev isn't available ⇒ 422. |
+| `jev_pass_threshold` | float | No | Default `0.5`. Probability at or above which jev's answer counts as a pass |
+| `jev_confidence_floor` | float | No | Default `0.6`. Minimum derived confidence for jev to settle a pass — with the defaults, jev settles only when probability ≥ 0.8 |
+| `jev_audit_rate` | float | No | Default `0`. Fraction of jev-settled passes also sent to the LLM judge, whose verdict wins |
 | `playbook_override` | object | No | In-memory playbook field overrides (see [Playbook Override](#playbook-override)). Requires admin / API-key auth. |
 
 **Response:** `EvalRun` with `status: "pending"`.
@@ -384,7 +388,7 @@ Empty / whitespace ⇒ field treated as unset (defaults take over). Malformed in
 |---|---|---|
 | Anthropic Sonnet | `anthropic/claude-sonnet-4.6` | Newest. Best general assistant. |
 | Anthropic Sonnet | `anthropic/claude-sonnet-4.5` | One rev behind. |
-| Anthropic Sonnet | `anthropic/claude-sonnet-4` | Default eval **simulator**. |
+| Anthropic Sonnet | `anthropic/claude-sonnet-4` | Older Sonnet. |
 | Anthropic Sonnet | `anthropic/claude-3.5-sonnet` | Stable cheap baseline. |
 | Anthropic Haiku | `anthropic/claude-haiku-4.5` | Fast / cheap. |
 | OpenAI GPT-5 | `openai/gpt-5.4` | Newest flagship. |
@@ -392,7 +396,7 @@ Empty / whitespace ⇒ field treated as unset (defaults take over). Malformed in
 | OpenAI GPT-5 | `openai/gpt-5.2-chat` | Stable GPT-5 chat. |
 | OpenAI GPT-4 | `openai/gpt-4.1-mini` | Solid mid-tier. |
 | OpenAI GPT-4 | `openai/gpt-4.1-nano` | Smallest GPT-4.1. |
-| OpenAI GPT-4o | `openai/gpt-4o` | Default eval **judge**. |
+| OpenAI GPT-4o | `openai/gpt-4o` | Older judge / assistant. |
 | OpenAI GPT-4o | `openai/gpt-4o-mini` | Cheap judge / assistant. |
 | OpenAI direct | `openai-direct/gpt-4o` | Direct provider (lower latency, different billing). |
 | OpenAI direct | `openai-direct/gpt-4o-mini` | Direct-provider 4o-mini. |
@@ -475,7 +479,15 @@ assertion_results       array   Per-assertion details
   rewrite_suggestion    string  Only on ambiguous verdicts: judge-proposed
                                 rewrite of the criterion into something
                                 objectively verifiable
-  explanation           string  LLM explanation of why
+  explanation           string  LLM explanation of why. EMPTY when
+                                judged_by="jev" — a confident pass the
+                                jev judge settled without the LLM
+  judged_by             string  "jev" | "llm" (jev_then_llm / shadow runs
+                                only; absent on structured assertions)
+  jev_probability       float   jev's probability the criterion holds
+  jev_confidence        float   Derived confidence of jev's call
+  escalated             bool    true when jev's answer fell short and the
+                                LLM judge decided
 tag_results             object  {tag_name: bool} — tag assertion results
 conversation            array   The simulated conversation
   role                  string  "user" or "assistant"

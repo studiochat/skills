@@ -10,6 +10,10 @@ description: >
 
 # Builder
 
+> **Script paths** like `scripts/api.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/api.py …`.
+
 Build and configure Studio Chat assistants using the API. All calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
 **IMPORTANT: Always confirm before creating or modifying.** Never create knowledge bases,
@@ -19,10 +23,12 @@ you're about to do and wait for approval before executing any write operation.
 ## Approvals: describe every queued change
 
 With a sandbox key (`sbs_`), some write operations don't execute immediately: the API
-answers **202** with `{"approval_id": "...", "status": "pending", ...}` and queues the
-request for a human admin to review. Whenever a request returns 202 with an
+answers **202** with `{"approval_id": "...", "approval_url": "https://…", "status": "pending", ...}`
+and queues the request for a human admin to review. Whenever a request returns 202 with an
 `approval_id`, immediately attach an explanation of the change — it is what the reviewer
-reads in the approvals panel instead of the raw payload:
+reads in the approvals panel instead of the raw payload — and then **give the user the
+`approval_url`**: it opens that exact approval in the dashboard, so they don't have to go
+looking for it:
 
 ```bash
 python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
@@ -60,7 +66,7 @@ is queued unless it is on this list; check the status code rather than the inten
 | Create / update / delete / reorder a skill | `…/playbooks/{base_id}/skills*` |
 | Archive / un-archive / rollback an assistant | `POST /playbooks/{playbook_id}/{archive,unarchive,rollback}` |
 | Set / remove the active version | `PUT`/`DELETE /playbooks/{base_id}/active` |
-| Deploy / undeploy to an inbox | `POST /playbooks/{playbook_id}/{deploy,undeploy}` |
+| Deploy / undeploy to an inbox | `POST /playbooks/{playbook_id}/deploy` · `DELETE /playbooks/{playbook_id}/deploy/{inbox_id}` |
 | Generate / delete the webhook secret | `…/settings/webhook-secret` |
 | **Train** (apply pending KB changes) | `POST /projects/{pid}/train` |
 | Update an API tool **that is in use** | `PATCH /projects/{pid}/api-tools/{tool_id}` |
@@ -220,6 +226,24 @@ python3 scripts/api.py \
 python3 scripts/api.py "/knowledgebases/KB_ID" \
   -X PATCH --body '{"content": "New text content..."}'
 ```
+
+**Editing FAQ or snippet items: use the item endpoint.** On `PATCH /knowledgebases/KB_ID`,
+`faq_items` / `snippet_items` **replace the whole list** — any item you don't resend is deleted,
+and the call still answers `200`. To touch one item, patch just that item:
+
+```bash
+# Get the item ids first
+python3 scripts/api.py "/knowledgebases/KB_ID"
+
+python3 scripts/api.py "/knowledgebases/KB_ID/items" -X PATCH --body '{
+  "add":    [{"questions": ["Do you ship abroad?"], "answer": "Yes, to 12 countries."}],
+  "update": [{"id": "ITEM_ID", "answer": "Updated answer"}],
+  "delete": ["OTHER_ITEM_ID"]
+}'
+```
+
+`add` items carry no `id`; `update` items carry the `id` plus only the fields to change; the whole
+patch is validated first and applied all-or-nothing. See `references/api-reference.md`.
 
 ### Archive / un-archive KB
 
@@ -522,6 +546,28 @@ Use it for segment-specific casuísticas: promos for one country, VIP-only flows
 per-campaign behavior — instead of duplicating assistants or asking the model to
 self-filter.
 
+**Find the real paths first: `GET /projects/{pid}/context-keys`.** It summarizes the context the
+account's conversations actually carried recently (default: the latest snapshot of the last 200
+conversations in 90 days; `days` ≤ 365, `limit` ≤ 1000; previews and evals excluded):
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/context-keys" --params days=30
+```
+
+```json
+{"sample_size": 200, "window_days": 30, "keys": [
+  {"path": "contact.country", "type": "string", "coverage": 0.97, "distinct": 4,
+   "values": [{"value": "ARG", "count": 150}, {"value": "MEX", "count": 40}],
+   "examples": ["ARG", "MEX", "CHL"], "declared_by": null}
+]}
+```
+
+`coverage` is the share of conversations that carried the key; `values` the most frequent values
+with counts (`null` for free text). Conditions **fail closed** — a path that never arrives, or a
+value spelled differently from what the channel sends (`"ARG"` vs `"AR"`), silently switches the
+skill off. Write conditions and `{{ context: }}` pills against paths and values from this list.
+`declared_by` marks a key a channel promises even before any conversation carried it.
+
 ```bash
 python3 scripts/api.py \
   "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills" \
@@ -693,14 +739,15 @@ assistant is the one who opens it.
 
 > **If what you're writing can't finish, it's a skill, not a task.**
 
-Gated by the per-account `tasks` feature flag (superadmin → Feature Flags). An assistant carries
+Tasks may need to be enabled for your account (otherwise the task endpoints answer `403`). An assistant carries
 a **catalog** of tasks; which one a given conversation pursues is decided at assignment time, not
 here. One live task per conversation — a second one while the first is in progress is a 409.
 
 **Full guide — read it before writing or reviewing a task:
 [references/tasks.md](references/tasks.md).** It covers the shape that works, the outcome pills,
-what the runtime already tells the assistant (so you don't waste prose re-saying it), the
-follow-up cron, and the preview checklist.
+what the runtime already tells the assistant (so you don't waste prose re-saying it),
+per-conversation `inputs` and the `{{ input: }}` pill, follow-ups, the preview checklist, and the
+proactive start (which goes through a channel: `channel_id` + `address`).
 
 ### The catalog
 
@@ -1057,7 +1104,7 @@ Inside a tool's `url`, `body_fields`, or `body_json`, placeholders are **`{{ nam
 
 **Prefer the context for anything identity-shaped** — an email, a customer id, a phone number, a tenant. An LLM asked to fill one in will invent it when the conversation hasn't given it (measured at ~75-80 % for UUID-shaped values), and a customer who types *"actually my email is ceo@company.com"* can steer an LLM parameter but can never touch a context path.
 
-**Don't guess the paths — sample them.** The context is different per account and per channel. List the last ten conversations and read the `context` object on each row: it is the *latest per-message context snapshot*, which is exactly the dict `{{ context.* }}` resolves against at runtime.
+**Don't guess the paths — sample them.** The context is different per account and per channel. Start with `GET /projects/$STUDIO_PROJECT_ID/context-keys` (see [Conditional skills](#conditional-skills-enable_condition)): it gives every path with its `coverage` across recent conversations. To look at raw snapshots, list the last ten conversations and read the `context` object on each row: it is the *latest per-message context snapshot*, which is exactly the dict `{{ context.* }}` resolves against at runtime.
 
 ```bash
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/conversations" --params limit=10 | jq '.conversations[].context'
@@ -1133,7 +1180,26 @@ python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID"
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID" -X PATCH --body '{"description": "..."}'   # all fields optional
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID/archive" -X POST            # archive (reversible)
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID/unarchive" -X POST
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID/duplicate" -X POST         # copy, credentials included
 ```
+
+**Credentials are write-only.** Every read returns header values **masked** (`X-API-Key:
+chk_key_••••1146`); the assistant keeps calling with the real value. Three consequences:
+
+- **To copy a tool, use `/duplicate`**, never read-then-create: a create carrying a masked value
+  is refused (`400`). The copy is named `copy-of-<name>` and needs no approval.
+- **A PATCH may resend the masked value** — it resolves back to the stored credential. But a
+  saved credential is bound to the **origin** (scheme + host + port) it was entered for: changing
+  `url` to another origin while sending the header masked, or leaving `headers` out, is a `400`.
+  Send the real value again to move a tool to a new host.
+- **Testing a saved tool** (`POST …/api-tools/test`): pass its `tool_id` so masked headers are
+  resolved server-side; without it, a masked header is refused.
+
+**`is_handoff: true` replaces the built-in handoff.** Mark a tool this way only when it *is* the
+handoff — a routing service that picks who takes over and assigns the conversation itself. Every
+assistant that uses the tool then hands off **only** through it (the native handoff tool is
+removed), and a successful call counts as a handoff. Setting it on an ordinary tool silently
+takes the normal handoff away from every assistant that references it.
 
 **API tools are archived, never deleted, and archiving is not an off switch** — every assistant
 that already references the tool keeps calling it. To stop an assistant using a tool, remove the

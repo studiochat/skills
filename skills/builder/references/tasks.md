@@ -7,8 +7,8 @@ It is not part of the assistant's standing instructions and it is not a skill.
 > A skill **waits** for the situation that matches it. A task is **already running** from the
 > moment it is assigned, and the assistant is the one who opens it.
 
-Tasks are gated by the per-account `tasks` feature flag (superadmin → Feature Flags). If an
-account doesn't have it, the dashboard hides the whole surface — check before promising it.
+Tasks may need to be enabled for your account. Where they aren't, the dashboard hides the whole
+surface and the task endpoints answer `403` — check before promising it.
 
 ---
 
@@ -176,6 +176,28 @@ needed):
 See **Template macros (the "pills")** in `SKILL.md` for what each one does. The object has to
 exist first — a macro pointing at a missing id silently degrades to literal text.
 
+### Per-conversation parameters: `inputs` and `{{ input: }}`
+
+The task text is the same for everyone; what differs per person — the amount owed, the questions
+to ask — travels as **`inputs`** when the task is assigned or started (§7). `inputs` is a
+free-form JSON object, yours to shape. It is stored on the task run for as long as the task lives
+and shown to the assistant in its task block on every turn, one `key: value` line per top-level
+key. Read a value in the task text with the value pill:
+
+```
+Preguntale al cliente, de a una, las preguntas de {{ input: preguntas | las preguntas pendientes }}.
+El saldo adeudado es {{ input: deuda.monto | N/A }}.
+```
+
+Grammar: a dotted path and an optional `| fallback`. A missing or empty value renders the
+fallback, or the literal `N/A` when there is none — the pill never errors, so a wrong path is
+only visible as `N/A` in the prompt.
+
+`inputs` is **not** `context`. `context` is the channel's per-turn view of the conversation
+(`{{ context: }}`); `inputs` is what the assigner chose for this run (`{{ input: }}`). They never
+overlap, so nothing a channel sends can shadow an input. Re-assigning a task that is already
+running is a no-op and does **not** rewrite its `inputs`.
+
 > **Gotcha — tags don't whitelist from a task.** The closed list of tags the assistant may emit
 > is parsed from backticked tokens in the **base instructions and skills only**; a task's text is
 > not scanned. A tag that appears only inside a task is silently dropped from the output. If a
@@ -185,12 +207,14 @@ exist first — a macro pointing at a missing id silently degrades to literal te
 
 ## 5. When the customer goes quiet
 
-A task is a job, not a message: silence doesn't finish it. A cron (`kaptbase task-nudge`, every
-10 minutes) looks at every conversation carrying a live task and decides whether to follow up.
+A task is a job, not a message: silence doesn't finish it. A scheduled job periodically looks at
+every conversation carrying a live task and decides whether to follow up. Follow-ups go out
+through the channel the conversation is on, so that channel has to support outbound messages.
 
 **The pacing is arithmetic, not judgment.** A run isn't even considered until the conversation
 has been quiet for `delay × 3^follow-ups-already-sent`. With the default 60-minute delay that's
-**1h → 3h → 9h**. Only runs that clear that floor get a (cheap) model call asking whether a
+**1h → 3h → 9h** at the earliest — the job runs periodically, so a follow-up lands some time
+after its floor, not on it. Only runs that clear that floor get a (cheap) model call asking whether a
 message right now actually serves the task — which is what catches *"te pago el viernes"* and
 *"no me contacten más"*.
 
@@ -210,7 +234,9 @@ python3 scripts/api.py "/playbooks/PLAYBOOK_ID/settings" -X PATCH --body '{
 |---|---|---|
 | `task_nudge_delay_minutes` | `60` | The base delay. **This is the urgency dial** — set it to 15 and the schedule becomes 15m / 45m / 2h15. There is no separate urgency field. |
 | `task_nudge_max` | `2` | Ceiling on follow-ups. A **backstop**, not the give-up rule — the task's own `{{failure}}` should normally fire first. |
-| `proactive_webhook_url` | — | The bridge route used to open a conversation the customer never started. Only needed for proactive starts. |
+
+> `proactive_webhook_url` (and its signing secret) still appear in the settings payload but are
+> **no longer read**. Proactive starts go through a channel — see `channel_id` in §7. Don't set it.
 
 Only a **delivered** follow-up counts against `task_nudge_max`; deciding not to write costs
 nothing. Both counters show up on the task log.
@@ -267,12 +293,59 @@ both on purpose.
 Building is the part above. These exist and are worth knowing about when someone asks:
 
 - **Assign in production** — `POST /playbooks/{base_id}/conversations/{conversation_id}/task`
-  with `{"task_id": "…"}`. Creates the conversation row if it doesn't exist. 409 if another task
-  is live, 400 on an unknown id.
-- **Read a conversation's task** — `GET` on the same path.
-- **Proactive start** (open a conversation nobody started and speak first, through the bridge) —
-  `POST /playbooks/{base_id}/conversations/start`. Not idempotent: calling it twice texts the
-  person twice. `deliver: false` is the dry run.
+  with `{"task_id": "…", "inputs": {…}}` (`inputs` optional, see §4). Creates the conversation
+  row if it doesn't exist. 409 if another task is live, 400 on an unknown id.
+- **Read a conversation's task** — `GET` on the same path. Returns `task` (status + reason) and
+  the live run's `inputs`.
+- **Proactive start** — open a conversation nobody started and speak first. See below.
 - **The task log** (every run, with its status, follow-up count and last reason) —
   `GET /projects/{project_id}/task-runs`, filterable by `status`, `task_id`,
   `playbook_base_id`, `conversation_id`.
+
+### Proactive start
+
+`POST /playbooks/{base_id}/conversations/start` (optional `?version=`, default the active one).
+Studio Chat assigns the task, writes the opening line, and asks a **channel** registered on the
+account to open the conversation on its platform. The channel answers with the platform's
+conversation id, which becomes the Studio Chat id — use it with `/chat` from then on.
+
+```bash
+python3 scripts/api.py "/playbooks/BASE_ID/conversations/start" -X POST --body '{
+  "task_id": "tsk_7f3ab2c19d04",
+  "channel_id": "CHANNEL_ID",
+  "address": {"channel": "intercom", "contact_id": "5f3c1a9e2b4d", "admin_id": "8291043"},
+  "inputs": {"deuda": {"monto": "$14.320"}},
+  "user": "CUSTOMER_ID"
+}'
+```
+
+| Field | Required | What it is |
+|---|---|---|
+| `task_id` | yes | The task, from this assistant's catalog |
+| `channel_id` | unless `deliver: false` | The channel that opens the conversation (Channels in the dashboard). It must support starting conversations and route an inbox to this assistant |
+| `address` | unless `deliver: false` | Who to reach and how. **Opaque** — forwarded to the channel verbatim, so its shape is the channel's contract (Intercom: the contact; WhatsApp: the phone plus an approved template) |
+| `transport` | no | How the channel reaches the person when it has more than one way — e.g. Intercom `inapp` (Messenger, the default) or `email`. Omit for the channel's default |
+| `conversation_id` | no (yes with `deliver: false`) | Pass it when the id is known in advance (WhatsApp: the contact). Leave it out where the platform mints it on send (Intercom) |
+| `inputs` | no | The task's per-conversation parameters (§4). Never sent to the channel |
+| `context` | no | The opening turn's context, like `context` on `/chat`. Not persisted |
+| `user` | no | The customer identity to bind, so the first turn can already read `{{ user: id }}` |
+| `opening` | no | `assistant` (default) — the assistant writes the first message. `channel` — the channel opens with what `address` specifies (a WhatsApp template outside the 24h window) and the assistant picks up on the reply |
+| `deliver` | no | `false` is the dry run: generates the opener and assigns the task without contacting any channel. Needs `conversation_id`; not available with `opening: "channel"` |
+
+Response (`201`): `conversation_id`, `task`, `message` (the opener), `delivered`, `adopted` (the
+id came back from the channel), `transport`.
+
+Errors:
+
+- `400` — task not in the catalog; `channel_id` isn't a channel of this account, can't start
+  conversations, doesn't route to this assistant, or doesn't offer the requested `transport`.
+  All checked **before** anything is written.
+- `403` — tasks aren't enabled for the account.
+- `409` — a task is already running on that conversation, or the id the channel returned already
+  belongs to another conversation.
+- `422` — missing `address` or `channel_id` with delivery on; missing `conversation_id` on a dry
+  run; a dry run with `opening: "channel"`.
+- `502` — the channel couldn't be reached or couldn't open the conversation.
+
+**Not idempotent.** Calling it twice sends a second opening message to a real person. Use
+`deliver: false` to check what the assistant would say.

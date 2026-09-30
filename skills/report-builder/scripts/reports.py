@@ -10,9 +10,11 @@ Usage:
     reports.py update <report_id> [options]
     reports.py delete <report_id>
     reports.py run <report_id> [--window N]
+    reports.py one-off --instructions INSTR [--hours N | --window N] [--playbooks IDS] [--name NAME]
     reports.py runs <report_id> [--limit N]
     reports.py run-status <run_id>
     reports.py artifact <run_id>
+    reports.py pdf <run_id> [-o report.pdf]
     reports.py playbooks
 
 Examples:
@@ -32,6 +34,13 @@ Examples:
 
     # Trigger a run
     reports.py run REPORT_ID --window 3
+
+    # One-off: define and run in one call (stays out of the report list)
+    reports.py one-off --instructions "What came in over the last 24 hours, and why did it hand off?" \
+      --hours 24 --playbooks abc-123
+
+    # Download the PDF of a completed run
+    reports.py pdf RUN_ID -o report.pdf
 
     # Check run status and logs
     reports.py run-status RUN_ID
@@ -54,8 +63,8 @@ API_TOKEN = os.environ.get("STUDIO_API_TOKEN", "")
 PROJECT_ID = os.environ.get("STUDIO_PROJECT_ID", "")
 
 
-def _request(method, path, body=None, params=None):
-    """Make an authenticated API request."""
+def _request(method, path, body=None, params=None, raw=False):
+    """Make an authenticated API request. With raw=True, return the response bytes."""
     url = urljoin(API_URL.rstrip("/") + "/", path.lstrip("/"))
     if params:
         url += "?" + urlencode(params)
@@ -71,6 +80,8 @@ def _request(method, path, body=None, params=None):
 
     try:
         with urlopen(req) as resp:
+            if raw:
+                return resp.read()
             if resp.status == 204:
                 return None
             return json.loads(resp.read().decode())
@@ -166,6 +177,34 @@ def cmd_run(report_id, window=None):
     print(f"Run triggered: {result['id']} (status: {result['status']})")
 
 
+def cmd_one_off(args):
+    if args.hours is not None and args.window is not None:
+        print("Pass --hours or --window, not both.", file=sys.stderr)
+        sys.exit(1)
+    body = {"instructions": args.instructions}
+    if args.name:
+        body["name"] = args.name
+    if args.playbooks:
+        body["playbook_base_ids"] = [p.strip() for p in args.playbooks.split(",")]
+    if args.hours is not None:
+        body["time_window_hours"] = args.hours
+    if args.window is not None:
+        body["time_window_days"] = args.window
+
+    result = _request("POST", f"/projects/{PROJECT_ID}/reports/one-off", body=body)
+    run = result.get("run") or {}
+    print(f"One-off run triggered: {run.get('id')} (status: {run.get('status')})")
+    print("Poll it with: reports.py run-status <run_id>, then: reports.py pdf <run_id>")
+
+
+def cmd_pdf(run_id, output=None):
+    pdf = _request("GET", f"/reports/runs/{run_id}/pdf", raw=True)
+    path = output or f"report-{run_id[:8]}.pdf"
+    with open(path, "wb") as f:
+        f.write(pdf)
+    print(f"Saved {len(pdf)} bytes to {path}")
+
+
 def cmd_runs(report_id, limit=10):
     result = _request("GET", f"/reports/{report_id}/runs", params={"limit": limit})
     runs = result.get("items", [])
@@ -252,6 +291,13 @@ def main():
     p_run.add_argument("report_id")
     p_run.add_argument("--window", type=int, help="Override time window (days)")
 
+    p_one_off = sub.add_parser("one-off", help="Define and run a report in one call (not listed, no schedule)")
+    p_one_off.add_argument("--instructions", required=True)
+    p_one_off.add_argument("--name", help="Optional label")
+    p_one_off.add_argument("--playbooks", help="Comma-separated playbook base_ids")
+    p_one_off.add_argument("--hours", type=int, help="Time window in hours (1-744)")
+    p_one_off.add_argument("--window", type=int, help="Time window in days (1-366); default 7")
+
     p_runs = sub.add_parser("runs", help="List runs for a report")
     p_runs.add_argument("report_id")
     p_runs.add_argument("--limit", type=int, default=10)
@@ -262,6 +308,10 @@ def main():
     p_artifact = sub.add_parser("artifact", help="Get report artifact")
     p_artifact.add_argument("run_id")
 
+    p_pdf = sub.add_parser("pdf", help="Download the PDF of a completed run")
+    p_pdf.add_argument("run_id")
+    p_pdf.add_argument("-o", "--output", help="Output path (default: report-<run>.pdf)")
+
     sub.add_parser("playbooks", help="List available playbooks")
 
     args = parser.parse_args()
@@ -269,7 +319,7 @@ def main():
     if not API_TOKEN:
         print("Error: STUDIO_API_TOKEN not set", file=sys.stderr)
         sys.exit(1)
-    if not PROJECT_ID and args.command in ("list", "create", "playbooks"):
+    if not PROJECT_ID and args.command in ("list", "create", "one-off", "playbooks"):
         print("Error: STUDIO_PROJECT_ID not set", file=sys.stderr)
         sys.exit(1)
 
@@ -285,6 +335,10 @@ def main():
         cmd_delete(args.report_id)
     elif args.command == "run":
         cmd_run(args.report_id, args.window)
+    elif args.command == "one-off":
+        cmd_one_off(args)
+    elif args.command == "pdf":
+        cmd_pdf(args.run_id, args.output)
     elif args.command == "runs":
         cmd_runs(args.report_id, args.limit)
     elif args.command == "run-status":

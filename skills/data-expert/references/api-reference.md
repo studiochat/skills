@@ -252,7 +252,8 @@ inbox_name                  string  Channel name (e.g., "Website Chat")
 playbook_name               string  Last active playbook name
 playbook_version            int     Last active playbook version number
 playbooks_info              array   All playbooks that participated [{id, name, version}]
-message_count               int     Total messages in conversation
+message_count               int     Messages people saw: customer turns + assistant
+                                    replies (see note below)
 first_message_at            string  ISO 8601 timestamp of first message
 last_message_at             string  ISO 8601 timestamp of last message
 first_user_message          string  Text of the customer's first message
@@ -280,6 +281,12 @@ model                       string  LLM model used (e.g., "gpt-4o-mini")
 winback_sent_at             string  ISO 8601 timestamp when winback was sent (null if not sent)
 context                     object  Context dict passed to the agent (contact info, etc.)
 ```
+
+> **`message_count` counts what people said** — customer turns and assistant replies. Tool
+> results, internal markers and the intermediate rows an assistant writes while calling tools
+> are not counted. This rule applies from **September 8, 2026**; earlier conversations were not
+> recounted and keep an older, higher count that included those rows, so an average over a range
+> crossing that date drops for that reason alone — compare like with like.
 
 **Pagination:** Response includes `total`, `limit`, `offset`. Use `offset += limit` to page.
 
@@ -317,7 +324,7 @@ resources_label             string  "irrelevant", "partial", or "relevant" (null
 first_user_message          string  Customer's first message
 tags                        array   List of tag strings
 has_handoff                 bool    Whether escalated to human
-message_count               int     Total messages
+message_count               int     Customer + assistant messages (see note above)
 last_message_at             string  ISO 8601 timestamp of last message
 skills                      array   Skill names loaded during the conversation (null if none)
 user_intent                 string  Short phrase: what the user wanted (null if unscored)
