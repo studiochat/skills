@@ -1,0 +1,80 @@
+name: Plugin zip
+
+# Builds studiochat-plugin.zip (the plugin root: .claude-plugin/plugin.json + skills/)
+# and publishes it on the rolling "plugin" release, so the download link never changes:
+# https://github.com/studiochat/skills/releases/download/plugin/studiochat-plugin.zip
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - ".claude-plugin/**"
+      - ".github/workflows/plugin-zip.yml"
+  pull_request:
+    paths:
+      - "skills/**"
+      - ".claude-plugin/**"
+      - ".github/workflows/plugin-zip.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the plugin layout
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, sys
+          errors = []
+          manifest = json.loads(pathlib.Path(".claude-plugin/plugin.json").read_text())
+          market = json.loads(pathlib.Path(".claude-plugin/marketplace.json").read_text())
+          entry = market["plugins"][0]
+          if entry["name"] != manifest["name"]:
+              errors.append(f"marketplace entry {entry['name']!r} != plugin.json name {manifest['name']!r}")
+          for skill in sorted(pathlib.Path("skills").iterdir()):
+              md = skill / "SKILL.md"
+              if not md.exists():
+                  errors.append(f"{skill}: missing SKILL.md")
+                  continue
+              front = re.match(r"^---\n(.*?)\n---\n", md.read_text(), re.S)
+              name = front and re.search(r"^name:\s*(\S+)", front.group(1), re.M)
+              if not name or name.group(1) != skill.name:
+                  errors.append(f"{md}: frontmatter name must be {skill.name!r}")
+              if not front or not re.search(r"^description:", front.group(1), re.M):
+                  errors.append(f"{md}: missing description")
+          for py in pathlib.Path("skills").rglob("*.py"):
+              compile(py.read_text(), str(py), "exec")
+          if errors:
+              print("\n".join(errors)); sys.exit(1)
+          print("plugin layout OK")
+          PY
+
+      - name: Build the zip
+        run: |
+          zip -qr studiochat-plugin.zip .claude-plugin/plugin.json skills \
+            -x '*__pycache__*' '*.DS_Store'
+          unzip -l studiochat-plugin.zip | tail -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studiochat-plugin
+          path: studiochat-plugin.zip
+
+      - name: Publish to the "plugin" release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Upload in Claude: Customize → Plugins → Add → Upload plugin. Built from ${GITHUB_SHA::7}."
+          if gh release view plugin >/dev/null 2>&1; then
+            gh release upload plugin studiochat-plugin.zip --clobber
+            gh release edit plugin --notes "$notes"
+          else
+            gh release create plugin studiochat-plugin.zip --title "Studio Chat plugin (zip)" --notes "$notes" --latest
+          fi

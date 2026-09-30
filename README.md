@@ -94,9 +94,14 @@ execution and file creation** on individual plans, **Organization settings → P
 Policy** on Team and Enterprise.
 
 <details>
-<summary>Without the plugin: upload a single skill as a zip</summary>
+<summary>Without the marketplace: upload a zip</summary>
 
-Package each skill as its own zip, with the skill folder at the **root** of the archive:
+**The whole plugin, ready to upload:** download
+[`studiochat-plugin.zip`](https://github.com/studiochat/skills/releases/download/plugin/studiochat-plugin.zip)
+(rebuilt on every change to `main`) and upload it in **Customize → Plugins → Add → Upload plugin**.
+It doesn't update by itself — download it again to pick up changes.
+
+**Or a single skill:** package each skill as its own zip, with the skill folder at the **root** of the archive:
 
 ```bash
 cd skills
