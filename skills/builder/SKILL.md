@@ -1,13 +1,18 @@
 ---
 name: builder
 description: >
-  Build and configure Studio Chat assistants — instructions, knowledge bases, skills, example blocks,
-  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets, Cal.com), alerts, schedules, and trending topics. Use when asked
-  to create, update, or manage any aspect of an assistant's configuration, including wiring up the
-  template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
+  Build and configure Studio Chat assistants — instructions, knowledge bases, skills, tasks, example blocks,
+  API tools, toolkit actions (Intercom, Slack, Zendesk, Pylon, Notion databases, Google Sheets, Cal.com, Kommo), alerts, schedules, and trending topics. Use when asked
+  to create, update, or manage any aspect of an assistant's configuration, including writing the
+  proactive tasks an assistant is assigned (with their {{success}} / {{failure}} outcome pills) and
+  wiring up the template macros (pills) and the objects they reference. Covers all CRUD operations via the Studio Chat API.
 ---
 
 # Builder
+
+> **Script paths** like `scripts/api.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/api.py …`.
 
 Build and configure Studio Chat assistants using the API. All calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
@@ -18,10 +23,12 @@ you're about to do and wait for approval before executing any write operation.
 ## Approvals: describe every queued change
 
 With a sandbox key (`sbs_`), some write operations don't execute immediately: the API
-answers **202** with `{"approval_id": "...", "status": "pending", ...}` and queues the
-request for a human admin to review. Whenever a request returns 202 with an
+answers **202** with `{"approval_id": "...", "approval_url": "https://…", "status": "pending", ...}`
+and queues the request for a human admin to review. Whenever a request returns 202 with an
 `approval_id`, immediately attach an explanation of the change — it is what the reviewer
-reads in the approvals panel instead of the raw payload:
+reads in the approvals panel instead of the raw payload — and then **give the user the
+`approval_url`**: it opens that exact approval in the dashboard, so they don't have to go
+looking for it:
 
 ```bash
 python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
@@ -44,6 +51,42 @@ for the human admin (they read your text, never the raw payload):
 
 Then tell the user the change is queued for approval. Only PENDING approvals accept a
 description (409 once reviewed); you can re-PATCH to refine it while it is pending.
+
+### What actually needs approval
+
+The queue covers **changes that reach production behaviour** — not every write. Assume nothing
+is queued unless it is on this list; check the status code rather than the intent.
+
+**Queued for a human (202 + `approval_id`) with an `sbs_` key:**
+
+| Operation | Endpoint |
+|---|---|
+| Update an assistant version | `PATCH /playbooks/{playbook_id}` · `PATCH /playbooks/{base_id}/latest` |
+| Update assistant settings | `PATCH /playbooks/{playbook_id}/settings` |
+| Create / update / delete / reorder a skill | `…/playbooks/{base_id}/skills*` |
+| Archive / un-archive / rollback an assistant | `POST /playbooks/{playbook_id}/{archive,unarchive,rollback}` |
+| Set / remove the active version | `PUT`/`DELETE /playbooks/{base_id}/active` |
+| Deploy / undeploy to an inbox | `POST /playbooks/{playbook_id}/deploy` · `DELETE /playbooks/{playbook_id}/deploy/{inbox_id}` |
+| Generate / delete the webhook secret | `…/settings/webhook-secret` |
+| **Train** (apply pending KB changes) | `POST /projects/{pid}/train` |
+| Update an API tool **that is in use** | `PATCH /projects/{pid}/api-tools/{tool_id}` |
+| Update / delete a tool configuration **that is in use** | `…/tool-configurations/{config_id}` |
+| Create / update / delete a context segment | `/segments*` |
+| Update project settings · delete the project | `/projects/{pid}*` |
+
+"In use" means referenced by the **active or latest** version of some playbook (instructions or
+skills). Unused tools and configs update directly.
+
+**NOT queued — these execute immediately:**
+
+Every knowledge-base write (create, update, archive, un-archive, rollback, notes) · reports ·
+alerts · monitors (**delete included**) · evals and eval runs · example blocks · schedules ·
+saved filters · creating an assistant · creating an API tool · archiving an API tool.
+
+> **The asymmetry that bites:** you can create and fill a knowledge base directly, but
+> `POST /projects/{pid}/train` — the step that actually makes it searchable — **is** queued. So
+> an agent can build a whole KB and still need an admin before it does anything. Plan for it:
+> tell the user the KB is ready and the training is waiting for approval.
 
 ### Show the change with a before/after block
 
@@ -215,14 +258,50 @@ python3 scripts/api.py "/knowledgebases/KB_ID" \
   -X PATCH --body '{"content": "New text content..."}'
 ```
 
-### Delete / Restore KB
+**Editing FAQ or snippet items: use the item endpoint.** On `PATCH /knowledgebases/KB_ID`,
+`faq_items` / `snippet_items` **replace the whole list** — any item you don't resend is deleted,
+and the call still answers `200`. To touch one item, patch just that item:
 
 ```bash
-python3 scripts/api.py "/knowledgebases/KB_ID" -X DELETE
-python3 scripts/api.py "/knowledgebases/KB_ID/restore" -X POST
+# Get the item ids first
+python3 scripts/api.py "/knowledgebases/KB_ID"
+
+python3 scripts/api.py "/knowledgebases/KB_ID/items" -X PATCH --body '{
+  "add":    [{"questions": ["Do you ship abroad?"], "answer": "Yes, to 12 countries."}],
+  "update": [{"id": "ITEM_ID", "answer": "Updated answer"}],
+  "delete": ["OTHER_ITEM_ID"]
+}'
 ```
 
-**After KB changes, sync the project to apply them.**
+`add` items carry no `id`; `update` items carry the `id` plus only the fields to change; the whole
+patch is validated first and applied all-or-nothing. See `references/api-reference.md`.
+
+### Archive / un-archive KB
+
+Knowledge bases are **never deleted** — the row, content, notes and embeddings all survive and
+the archive is reversible.
+
+```bash
+python3 scripts/api.py "/knowledgebases/KB_ID/archive" -X POST
+python3 scripts/api.py "/knowledgebases/KB_ID/unarchive" -X POST
+
+# List including archived ones
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/knowledgebases" --params include_archived=true
+```
+
+Archiving does **not** pull the KB out of retrieval — assistants that already reference it keep
+searching it, the active version included. What changes: **new** references are refused (409 on
+assistant create/update) and the KB is **frozen for editing** (PATCH, rollback, notes → 409).
+To stop an assistant from using a KB, remove the reference from the assistant instead.
+
+`DELETE /knowledgebases/{id}` and `POST …/restore` still work as deprecated aliases of
+archive/un-archive.
+
+A KB `title` must be unique among the project's **live** KBs (trimmed, case-insensitive) — 409
+otherwise. An archived title blocks nothing.
+
+**After KB changes, sync the project to apply them** — and note that the sync itself is queued
+for approval with an `sbs_` key.
 
 ### Correction Notes
 
@@ -333,10 +412,31 @@ python3 scripts/api.py "/playbooks/BASE_ID/active" \
 python3 scripts/api.py "/playbooks/PLAYBOOK_ID/settings" \
   -X PATCH --body '{"is_disabled": true}'
 
-# Configure winback
+# Turn escalation to a human on/off (takes effect on the next turn)
 python3 scripts/api.py "/playbooks/PLAYBOOK_ID/settings" \
-  -X PATCH --body '{"winback_enabled": true, "winback_delay_minutes": 30}'
+  -X PATCH --body '{"handoff_enabled": false}'
+
+# Configure follow-ups — the WHOLE list is replaced, so read it first
+python3 scripts/api.py "/playbooks/PLAYBOOK_ID/settings" \
+  -X PATCH --body '{
+    "winback_rules": [{
+      "name": "Abandoned checkout",
+      "enabled": true,
+      "include_tags": ["checkout"],
+      "schedule": [{"delay_minutes": 30}, {"delay_minutes": 1380}],
+      "send_mode": "llm",
+      "send_criteria": "Only if they asked about a product and never got a price.",
+      "message_instructions": "Remind them what they were looking at."
+    }]
+  }'
 ```
+
+> **`winback_enabled` / `winback_delay_minutes` / `winback_include_tags` /
+> `winback_exclude_tags` are gone.** The last three no longer exist, and `winback_enabled` is
+> derived read-only (true when at least one rule is enabled) and **ignored on write**. Follow-ups
+> are a list of `winback_rules` — see
+> [Follow-ups](references/api-reference.md#follow-ups-winback-rules) for the full shape, and
+> check `GET /accounts/channels` for whether anything can actually deliver them.
 
 ---
 
@@ -387,6 +487,29 @@ python3 scripts/api.py \
 Skills are sub-instructions loaded on-demand during conversations. Only skill metadata (name + description) goes in the system prompt; the full content is loaded via a `load_skill` tool call when the conversation matches the skill's description. This keeps the base context window small.
 
 Skills are versioned with the playbook — adding, editing, or deleting a skill creates a new playbook version.
+
+> **`trigger` is dashboard display only.** The runtime decides whether to load a skill from
+> **`description` alone** — `trigger` is never compiled into the prompt and the model never sees
+> it. Whatever you write in `trigger`, the "when to use this" has to also be in `description`,
+> or the skill will not load. It is still a required field.
+
+### `always_load` — inline a skill instead of loading it on demand
+
+`always_load: true` inlines the skill's full content into the **static system prompt** rather
+than waiting for a `load_skill` call.
+
+Use it for skills that fire in most conversations: their tokens join the cross-conversation
+prompt-cache prefix (read at roughly a tenth of the price by every conversation) and the
+`load_skill` round-trip disappears. Use the default (`false`) for the long tail — a skill that
+is rarely relevant costs the whole prompt every turn when it is always loaded.
+
+It only applies while the skill is enabled for the turn (`is_active` **and** `enable_condition`).
+An always-loaded skill's `description` is rendered next to its content as *"When to use: …"*,
+so the description still matters.
+
+One consequence worth knowing: the tools and KBs an always-loaded skill references become
+visible from **turn zero** and are never gated behind a `load_skill` event — where an on-demand
+skill's tools only appear once it loads.
 
 ### List skills
 
@@ -454,6 +577,28 @@ Use it for segment-specific casuísticas: promos for one country, VIP-only flows
 per-campaign behavior — instead of duplicating assistants or asking the model to
 self-filter.
 
+**Find the real paths first: `GET /projects/{pid}/context-keys`.** It summarizes the context the
+account's conversations actually carried recently (default: the latest snapshot of the last 200
+conversations in 90 days; `days` ≤ 365, `limit` ≤ 1000; previews and evals excluded):
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/context-keys" --params days=30
+```
+
+```json
+{"sample_size": 200, "window_days": 30, "keys": [
+  {"path": "contact.country", "type": "string", "coverage": 0.97, "distinct": 4,
+   "values": [{"value": "ARG", "count": 150}, {"value": "MEX", "count": 40}],
+   "examples": ["ARG", "MEX", "CHL"], "declared_by": null}
+]}
+```
+
+`coverage` is the share of conversations that carried the key; `values` the most frequent values
+with counts (`null` for free text). Conditions **fail closed** — a path that never arrives, or a
+value spelled differently from what the channel sends (`"ARG"` vs `"AR"`), silently switches the
+skill off. Write conditions and `{{ context: }}` pills against paths and values from this list.
+`declared_by` marks a key a channel promises even before any conversation carried it.
+
 ```bash
 python3 scripts/api.py \
   "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills" \
@@ -509,6 +654,59 @@ way — items that omit the field preserve the stored condition by skill name, s
 config-as-code that predates this field never wipes conditions. To **set** a
 condition from config-as-code you must include the field explicitly.
 
+### Context segments — name a condition once, reuse it everywhere
+
+A **segment** is a saved `enable_condition` group, named and stored **per account** (shared
+across every assistant in the workspace). Skills reference one by id instead of re-authoring the
+same clauses, so an audience is defined once and edited in one place.
+
+```bash
+# Create a segment
+python3 scripts/api.py "/segments" -X POST --body '{
+  "name": "latam-vip",
+  "description": "VIP contacts in Argentina or Mexico",
+  "definition": {
+    "op": "and",
+    "clauses": [
+      {"path": "contact.vip", "operator": "eq", "value": true},
+      {"path": "contact.country", "operator": "in", "value": ["ARG", "MEX"]}
+    ]
+  }
+}'
+
+python3 scripts/api.py "/segments"                      # list
+python3 scripts/api.py "/segments/SEGMENT_ID"           # get
+python3 scripts/api.py "/segments/SEGMENT_ID" -X PATCH --body '{"description": "…"}'
+python3 scripts/api.py "/segments/SEGMENT_ID" -X DELETE
+```
+
+Reference it from any skill condition with a `segment_id` node, mixed freely with ordinary
+clauses:
+
+```json
+{
+  "op": "and",
+  "clauses": [
+    {"segment_id": "SEGMENT_ID"},
+    {"path": "campaign", "operator": "eq", "value": "black-friday"}
+  ]
+}
+```
+
+- `name` is normalized to **kebab-case** and must be unique per account (max 100).
+- A `segment_id` node also takes `"negate": true`.
+- **A broken reference fails closed:** an unresolvable, cyclic or malformed `segment_id`
+  evaluates to `false` and its `negate` is **ignored** — a broken reference must never *enable*
+  a skill.
+- **Writes are approval-gated** (`sbs_` → 202); reads are open to any account member.
+- `POST /segments/condition-check` dry-runs a segment definition the same way the skill
+  condition-check does, and resolves the conversation to whichever assistant owns it — so you
+  do not need to know the project.
+
+> Segments are conditions over **context**. Do not confuse them with **saved filters**, which
+> are named tag expressions for filtering the ChatLog — see
+> [Saved filters](references/api-reference.md#saved-filters).
+
 ### Dry-run a condition (`condition-check`)
 
 Validate a condition and test what it would do — against a hand-built context or
@@ -548,18 +746,113 @@ Skill content and playbook instructions support the **same five** inline macros.
 |---|---|---|
 | `{{ kb(KB_ID) }}` | a knowledge base the agent can search | [Knowledge Bases](#knowledge-bases) |
 | `{{ tool(TOOL_ID) }}` | a custom HTTP API tool | [API Tools](#api-tools) |
-| `{{ custom_tool: short_name }}` | one **pre-configured** toolkit action (some params pinned) | [Toolkit Actions](#toolkit-actions-slack) (a tool configuration) |
+| `{{ custom_tool: short_name }}` | one **pre-configured** toolkit action (some params pinned) | [Toolkit Actions](#toolkit-actions) (a tool configuration) |
 | `{{ examples: BLOCK_ID }}` | a reference example block | [Example Blocks](#example-blocks) |
 
 Each referenced KB / tool / action is registered in the agent **even before** the skill loads, so it's available the moment the skill fires.
 
-**`{{ custom_tool: short_name }}` requires an object to exist first** — a *tool configuration* — and missing it is the most common source of "the assistant can't do X". See [Toolkit Actions](#toolkit-actions-slack).
+**`{{ custom_tool: short_name }}` requires an object to exist first** — a *tool configuration* — and missing it is the most common source of "the assistant can't do X". See [Toolkit Actions](#toolkit-actions).
 
 **`{{ examples: BLOCK_ID }}` is the ONLY way to add examples** — never paste sample conversations directly into instruction or skill text. See [Example Blocks](#example-blocks).
 
 > **No save-time validation.** A playbook saves fine even if a macro points at something that doesn't exist or a toolkit action that isn't connected — at runtime the macro silently degrades to literal text and the action just isn't available (only a log warning). Always confirm the referenced object exists before writing the macro.
 >
 > There is **no** `{{ composio_tool: … }}` macro (Composio was removed).
+
+---
+
+## Tasks
+
+A **task** is concrete, finite work an assistant is sent to drive to completion inside one
+conversation — *collect these three documents*, *regularize this debt*. A skill **waits** for the
+situation that matches it; a task is **already running** from the moment it is assigned, and the
+assistant is the one who opens it.
+
+> **If what you're writing can't finish, it's a skill, not a task.**
+
+Tasks may need to be enabled for your account (otherwise the task endpoints answer `403`). An assistant carries
+a **catalog** of tasks; which one a given conversation pursues is decided at assignment time, not
+here. One live task per conversation — a second one while the first is in progress is a 409.
+
+**Full guide — read it before writing or reviewing a task:
+[references/tasks.md](references/tasks.md).** It covers the shape that works, the outcome pills,
+what the runtime already tells the assistant (so you don't waste prose re-saying it),
+per-conversation `inputs` and the `{{ input: }}` pill, follow-ups, the preview checklist, and the
+proactive start (which goes through a channel: `channel_id` + `address`).
+
+### The catalog
+
+Tasks live on the playbook **version** (editing one creates a version, like a skill) and are
+three fields: `id` (minted on write, stable across renames — never invent one), `name`
+(kebab-case), `instructions` (prose).
+
+```bash
+# Read — the ids live here
+python3 scripts/api.py "/playbooks/BASE_ID/latest" | jq '.tasks'
+
+# Write — FULL REPLACEMENT of the array, creates a version, queued for approval
+python3 scripts/api.py "/playbooks/BASE_ID/latest" -X PATCH --body '{
+  "tasks": [
+    {"id": "tsk_7f3ab2c19d04", "name": "cobrar-deuda", "instructions": "…"},
+    {"name": "validar-identidad", "instructions": "…"}
+  ]
+}'
+```
+
+**Always read the current array and resend it whole**, keeping every existing `id`. A PATCH
+carrying only the task you're adding deletes all the others; a task resent without its `id` gets
+a new one minted, orphaning whatever referenced the old one.
+
+### The outcome pills
+
+Two macros exist only inside a task, and they are how it ends:
+
+| You write | The assistant reads |
+|---|---|
+| `{{success}}` | `the task is DONE (report task.status = "done")` |
+| `{{failure}}` | `the task has FAILED (report task.status = "failed")` |
+
+Write each one **inside the sentence that states its condition**, so the branch and its outcome
+read as one thought — `Cuando los tres documentos estén recibidos y legibles, {{success}}.` Use
+as many as the task has branches. **No `{{success}}` and it never stops pushing past the goal;
+no `{{failure}}` and it never ends** — the run stays open, holds the conversation's only slot,
+and keeps qualifying for follow-ups.
+
+The give-up rule ("insist for three days, then stop") is prose in the instructions. No config
+field carries it — `task_nudge_max` is only a backstop.
+
+The [template macros](#template-macros-the-pills) work here too, and the KBs/tools they reference
+are wired in from turn zero. One exception: **the tag whitelist is parsed from instructions and
+skills only, never from a task** — a tag that appears only inside a task is silently dropped, so
+declare it in the instructions too.
+
+### Try it before shipping it
+
+The preview is the real thing minus delivery: assign the task, then run a turn with **no user
+message** — exactly what a production proactive start sends.
+
+```bash
+# 1. Assign (the conversation doesn't have to exist yet)
+python3 scripts/api.py "/playbooks/BASE_ID/conversations/preview-001/task" \
+  --params version=7 -X POST --body '{"task_id": "tsk_7f3ab2c19d04"}'
+
+# 2. The turn nobody asked for — the task drives it
+python3 scripts/api.py "/playbooks/BASE_ID/versions/7/preview/chat" -X POST --body '{
+  "conversation_id": "preview-001", "user_message": ""
+}'
+```
+
+Check, in this order: it **opens** with the task (not "¿en qué te puedo ayudar?"), asks **one**
+thing at a time, reaches `done` with a cooperative customer, reaches `failed` with a refusing
+one, survives a detour, and still sounds like the assistant. The `task` block on every response
+(`status` + `reason`) is its own read on where it is.
+
+### Follow-ups when the customer goes quiet
+
+A cron chases a live task after `task_nudge_delay_minutes × 3^follow-ups-already-sent` (default
+60min → 1h / 3h / 9h), capped by `task_nudge_max` (default 2). Both are playbook-level settings
+(`PATCH /playbooks/PLAYBOOK_ID/settings`) — the delay **is** the urgency dial, there is no
+separate field. Handed-off, preview and eval conversations never qualify.
 
 ---
 
@@ -588,7 +881,7 @@ Example blocks are reference conversations that show the assistant HOW to commun
 
 > **Example blocks are THE only way to add examples. Always.** Never write sample conversations, "here's a good reply:", Q→A pairs, or any other verbatim example directly into the instructions or skill text. Every example — without exception — goes into an example block and is referenced with `{{ examples: BLOCK_ID }}`. If you catch yourself typing an example turn inline in `content`, stop and move it into a block.
 >
-> Why: blocks are compiled into structured `<example id="…">` tags the LLM is told to follow and cite (`<<id>>`), they're versioned/immutable for clean rollback, and they keep the instructions readable. Examples pasted raw into the prose get none of that machinery — they read as literal rules, bloat the prompt, and can't be cited or rolled back. When migrating or editing an existing playbook, **move any inline examples you find into blocks** and replace them with the macro.
+> Why: blocks are compiled into structured `<example id="…">` tags the LLM is told to follow and cite (`<<id>>`), they can be cited by id, and they keep the instructions readable. Examples pasted raw into the prose get none of that machinery — they read as literal rules, bloat the prompt, and can't be cited or rolled back. When migrating or editing an existing playbook, **move any inline examples you find into blocks** and replace them with the macro.
 
 When compiled, examples are injected into the prompt as `<example id="xxxxx">` tags. The LLM is instructed to follow the style of matching examples and reference them in its response with `<<example_id>>` markers.
 
@@ -598,7 +891,14 @@ When compiled, examples are injected into the prompt as `<example id="xxxxx">` t
 2. **Reference it in instructions or skills** — using `{{ examples: BLOCK_ID }}`
 3. **At runtime** — the assistant sees the examples, adopts the style, and cites which example it followed
 
-Example blocks are **immutable** — editing creates a new block (new ID), and saving the playbook creates a new version pointing to the new block. Previous versions retain their original examples for rollback.
+> **Editing a block is retroactive across every version.** `PATCH` mutates the block **in
+> place** — same id, new content — and the compiler resolves `{{ examples: ID }}` by id
+> regardless of which playbook version is rendering it. So editing a block rewrites the examples
+> that **every historical version** shows, rollback targets included. Blocks are not versioned
+> and rolling an assistant back does **not** bring back a block's previous content.
+>
+> If you need the old examples to survive, **create a new block** and repoint the macro instead
+> of editing the existing one.
 
 ### Create example block
 
@@ -658,12 +958,30 @@ curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
   }'
 ```
 
-### Delete example block
+### Archive / un-archive example block
+
+**Example blocks are never deleted.** Archiving only hides a block from the list and has **no
+runtime effect whatsoever**: every `{{ examples: ID }}` pill keeps expanding in every saved
+version, and macro linting keeps treating the id as present. To stop using a block, remove the
+pill from the instructions.
 
 ```bash
+# Archive
 curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
-  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks/BLOCK_ID" -X DELETE
+  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks/BLOCK_ID/archive" -X POST
+
+# Un-archive
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks/BLOCK_ID/unarchive" -X POST
+
+# List including archived ones
+curl -s -H "Authorization: Bearer $STUDIO_API_TOKEN" \
+  "$API_BASE/projects/$STUDIO_PROJECT_ID/example-blocks?include_archived=true"
 ```
+
+`DELETE /projects/{pid}/example-blocks/{block_id}` still works as a **deprecated alias** of
+archive. `GET` resolves an archived block (it carries `is_archived`); `PATCH` on one is a `409`
+— un-archive it first.
 
 ### Using examples in instructions
 
@@ -801,8 +1119,8 @@ python3 scripts/api.py \
 
 - **`name`** must match `^[a-zA-Z0-9_.-]{1,64}$` (LLM tool-name rule — **no spaces**).
 - **`headers`** are static — put auth here (e.g. `X-API-Key`).
-- **`data_expiration_hours`** (optional): response cache TTL. `0` = always re-fetch, `null`/omitted = never expires.
-- **`response_jmespath`** (optional): a JMESPath applied to the JSON response before the LLM sees it, to trim/reshape verbose payloads.
+- **`data_expiration_hours`** (optional): **not a cache** — there is none, every call re-fetches. It appends a freshness note to the description the LLM reads: `0` → `[DATA EXPIRATION: immediate]` (never reuse an earlier result in this conversation), `6` → good for 6 h, `null`/omitted → no guidance. Use `0` for anything that changes (balances, stock, ticket status).
+- **`response_jmespath`** (optional): a JMESPath applied to the JSON response before the LLM sees it, to trim/reshape verbose payloads. Careful: it only falls back to the raw body when the expression fails to *parse*. A typo'd key is valid JMESPath that matches nothing, and the LLM receives `"null"`.
 
 ### Templating: `{{ param }}` (double braces, Jinja)
 
@@ -814,6 +1132,16 @@ Inside a tool's `url`, `body_fields`, or `body_json`, placeholders are **`{{ nam
 | `{{ context.path }}` | the **conversation context**, not asked to the LLM | nowhere extra — auto-detected (e.g. `{{ context.contact.email }}`) |
 
 > Don't confuse this with the `{{ tool(...) }}` / `{{ kb(...) }}` **pills** that go in *playbook/skill text* (above). Those reference objects; `{{ param }}` here is a value the tool fills in. Same braces, different layer.
+
+**Prefer the context for anything identity-shaped** — an email, a customer id, a phone number, a tenant. An LLM asked to fill one in will invent it when the conversation hasn't given it (measured at ~75-80 % for UUID-shaped values), and a customer who types *"actually my email is ceo@company.com"* can steer an LLM parameter but can never touch a context path.
+
+**Don't guess the paths — sample them.** The context is different per account and per channel. Start with `GET /projects/$STUDIO_PROJECT_ID/context-keys` (see [Conditional skills](#conditional-skills-enable_condition)): it gives every path with its `coverage` across recent conversations. To look at raw snapshots, list the last ten conversations and read the `context` object on each row: it is the *latest per-message context snapshot*, which is exactly the dict `{{ context.* }}` resolves against at runtime.
+
+```bash
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/conversations" --params limit=10 | jq '.conversations[].context'
+```
+
+Depend only on keys that appear in **all ten**. A key present in three of ten is a key that will fail on the other seven — and the two failures are not the same: an unresolvable `{{ context.path }}` in the **url** makes the call error out, while the same path in a **body field** is silently dropped from the body.
 
 **Every templated field needs a description.** For URL params, each `{{ x }}` in `url` gets a `parameters` entry — `{name, description}` only, and URL params are **always string**. For body params, the description lives on the matching `body_fields` entry. That description is the *only* signal the LLM has for what to put there — write it well.
 
@@ -860,13 +1188,53 @@ python3 scripts/api.py \
 
 A full-string `"{{ qty }}"` (or a bare `{{ qty }}`) becomes a **typed** value (int/bool preserved); an embedded `"id-{{ x }}"` is string-interpolated.
 
+### Enrichment: running a tool before the LLM sees the message
+
+A playbook's **`enrichment_tool_ids`** (a subset of its `api_tools`) are executed **before every incoming message** — not just the first — and their results are injected into the system prompt as `<pre_loaded_context>`. This is how you stop an assistant from burning a turn calling *identify-this-phone-number* on every single message.
+
+```bash
+python3 scripts/api.py "/playbooks/BASE_ID/latest" -X PATCH --body '{
+  "api_tools": ["TOOL_A", "TOOL_B"],
+  "enrichment_tool_ids": ["TOOL_A"]
+}'
+```
+
+- **An enrichment tool must have zero LLM-filled parameters.** The pre-run supplies no LLM values, so a `{{ order_id }}` renders empty and the request goes out malformed. Enrichment tools are context-only.
+- A tool whose `{{ context.* }}` paths don't all resolve is **skipped silently** for that message — the graceful degradation for channels that don't carry a phone number.
+- The whole phase is capped at **5 s** and fails open: anything slower or erroring is dropped, and the message goes through without the block.
+- Results are merged back as `context.enrichment.<tool_name>`, so a **second** tool can consume the first one's output: `{{ context.enrichment.resolve_operator.branch_id }}`. This is the only chaining mechanism there is, and it only flows enrichment → anything.
+
 ### Get / update / delete
 
 ```bash
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID"
 python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID" -X PATCH --body '{"description": "..."}'   # all fields optional
-python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID" -X DELETE                                  # soft delete
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID/archive" -X POST            # archive (reversible)
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID/unarchive" -X POST
+python3 scripts/api.py "/projects/$STUDIO_PROJECT_ID/api-tools/TOOL_ID/duplicate" -X POST         # copy, credentials included
 ```
+
+**Credentials are write-only.** Every read returns header values **masked** (`X-API-Key:
+chk_key_••••1146`); the assistant keeps calling with the real value. Three consequences:
+
+- **To copy a tool, use `/duplicate`**, never read-then-create: a create carrying a masked value
+  is refused (`400`). The copy is named `copy-of-<name>` and needs no approval.
+- **A PATCH may resend the masked value** — it resolves back to the stored credential. But a
+  saved credential is bound to the **origin** (scheme + host + port) it was entered for: changing
+  `url` to another origin while sending the header masked, or leaving `headers` out, is a `400`.
+  Send the real value again to move a tool to a new host.
+- **Testing a saved tool** (`POST …/api-tools/test`): pass its `tool_id` so masked headers are
+  resolved server-side; without it, a masked header is refused.
+
+**`is_handoff: true` replaces the built-in handoff.** Mark a tool this way only when it *is* the
+handoff — a routing service that picks who takes over and assigns the conversation itself. Every
+assistant that uses the tool then hands off **only** through it (the native handoff tool is
+removed), and a successful call counts as a handoff. Setting it on an ordinary tool silently
+takes the normal handoff away from every assistant that references it.
+
+**API tools are archived, never deleted, and archiving is not an off switch** — every assistant
+that already references the tool keeps calling it. To stop an assistant using a tool, remove the
+reference from the assistant. `DELETE` still works as a deprecated alias of archive.
 
 Then wire it into an assistant with `{{ tool(TOOL_ID) }}` (see [Template macros](#template-macros-the-pills)).
 
@@ -880,7 +1248,7 @@ tool (which the builder creates outright), a toolkit must be **connected by the 
 credentials before its actions can be used.
 
 > **Full catalog of every toolkit action** — Intercom Tickets/Conversations, Slack, Zendesk, Pylon,
-> GU1, Notion Databases, Google Sheets, Cal.com — and how to configure each and wire it into instructions is in
+> GU1, Notion Databases, Google Sheets, Cal.com, Kommo — and how to configure each and wire it into instructions is in
 > [`references/toolkit-actions.md`](./references/toolkit-actions.md). It also covers the Intercom
 > ticket **Motivo/Submotivo taxonomy** (the most error-prone part), the Google Sheets
 > **access-check flow** (verify the sheet is shared with the service account BEFORE configuring),
@@ -900,7 +1268,7 @@ credentials before its actions can be used.
 Both expose the same `SLACK_SEND_MESSAGE` action with the same params — only the registry slug differs. In Step 1 check which one is `is_connected: true` and use **that** slug in the metadata paths below. A project typically has one or the other, not both.
 
 > The other toolkits (Intercom Tickets/Conversations, Zendesk, Pylon, GU1, Notion Databases,
-> Google Sheets, Cal.com) follow the same connect → discover → configure pattern — each action, its params,
+> Google Sheets, Cal.com, Kommo) follow the same connect → discover → configure pattern — each action, its params,
 > and how to wire it into instructions is documented in
 > [`references/toolkit-actions.md`](./references/toolkit-actions.md). Google Sheets is the one
 > twist: it's enabled with no credentials, and each spreadsheet must pass the `sheet_access`
@@ -1158,7 +1526,8 @@ All fields optional: `name`, `instructions`, `cron_expression`, `playbook_base_i
 python3 scripts/api.py "/alerts/ALERT_ID" -X DELETE
 ```
 
-Soft delete — requires human user (API keys cannot delete).
+Immediate (204) and **not** approval-gated — `sbs_` keys can delete an alert outright. Confirm
+with the user first.
 
 ### Test run an alert
 
@@ -1351,12 +1720,9 @@ python3 scripts/api.py "/monitors/MONITOR_ID/duplicate" -X POST
 python3 scripts/api.py "/monitors/MONITOR_ID" -X DELETE
 ```
 
-> **Sandbox (`sbs_`) callers:** delete is the one operation that needs a human reviewer.
-> The request returns **202** with `{"approval_id": "...", "status": "pending", "description": "...",
-> "message": "Request queued for admin approval."}` instead of executing immediately. Confirm
-> the deletion with the user (or the admin) before relying on the queue, and describe the
-> queued change (see *Approvals: describe every queued change* above). Every other monitor
-> operation (preview, create, list, get, update, duplicate, test, runs) executes synchronously.
+> **Delete is immediate — it is NOT queued for approval.** Every monitor operation, delete
+> included, executes synchronously for `sbs_` callers and answers `204`. There is no approval to
+> wait for and nothing to undo, so **confirm the deletion with the user before calling it.**
 
 ### Test run a monitor
 
@@ -1471,17 +1837,33 @@ python3 scripts/api.py \
 - **Playbook versioning**: Every update creates a new version. Use `active` endpoint to control which version is live.
 - **Skills versioning**: Skill changes (add/edit/delete) also create new playbook versions. Use the dedicated skill endpoints for individual operations.
 - **base_id vs playbook_id**: Active version endpoints use `base_id` (stable across versions). Other endpoints use `playbook_id` (specific version). Skill endpoints use `base_id`.
-- **Soft deletes**: Delete operations are soft — use restore to undo.
+- **Nothing is deleted, everything is archived**: knowledge bases, assistants, API tools and example blocks all archive instead of deleting, and archiving is reversible. `DELETE` still works as a deprecated alias of archive on each of them. **Archiving never changes runtime behaviour** — see the per-resource notes in the API reference.
 
 ## Gotchas
 
-- **Con sandbox key (`sbs_`), las writes son 202 pending — siempre adjuntar descripción al approval.** El reviewe solo ve el description que adjuntás, no el payload raw. Si no describís, el approval queda sin contexto.
-- **`playbook_base_id` para gestión de versiones, `playbook_id` para una versión específica.** Confundirlos lleva a crear versiones duplicadas.
-- **Nunca eliminar KBs sin confirmar que no están linkeadas a otros asistentes.** Una KB puede estar compartida entre varios playbooks del mismo proyecto.
-- **Los `pills` (template macros) deben existir como objetos en la API antes de referenciarlos en instrucciones.** Si el pill `{{nombre_cliente}}` no existe como template variable registrada, la instrucción lo trata como texto literal.
-- **Trending topics se generan en background — no son instantáneos.** Después de habilitarlos, hay un delay de procesamiento. No asumir que están disponibles inmediatamente.
-- **El campo `content` de las instrucciones tiene límite de tokens.** Si las instrucciones son muy largas, el asistente puede truncar en producción. Preferir casuísticas para comportamientos específicos.
+- **Only *some* writes queue for approval — see [What actually needs approval](#what-actually-needs-approval).** When one does return a 202, always attach a description: the reviewer sees the text you attach, not the raw payload. Without it the approval lands with no context.
+- **`playbook_base_id` for version management, `playbook_id` for one specific version.**
+  Confusing them leads to duplicate versions.
+- **Archiving a KB does not stop anyone from using it.** Assistants that already reference it
+  keep retrieving from it, the active version included. To stop an assistant from using a KB,
+  remove the reference from the assistant. Also check whether other assistants in the project
+  share it before you change it — a KB is project-scoped, not assistant-scoped.
+- **A pill must exist as an object in the API before you reference it in instructions.** If
+  `{{ tool: … }}` / `{{ custom_tool: … }}` / `{{ examples: … }}` points at something that was
+  never created, the instruction renders it as literal text and the assistant silently loses the
+  capability. This is the most common cause of "the assistant can't do X".
+- **Editing an example block is retroactive.** It mutates in place, so every saved version that
+  references the block — rollback targets included — renders the new content. Create a new block
+  if the old examples need to survive.
+- **A skill's `trigger` is dashboard display only.** The runtime decides from `description`
+  alone. Put the "when to use" in `description` or the skill never loads.
+- **Trending topics are generated in the background.** After enabling them there is a processing
+  delay — don't assume they are available immediately.
+- **Instruction `content` is token-bounded.** Very long instructions can truncate in production.
+  Prefer casuísticas (skills) for scenario-specific behaviour, and reserve the base instructions
+  for universal rules.
 
-## Dependencias
+## Related skills
 
-Este skill es la base que usan `customer-success:continuous-improvement` y `customer-success:quality-engineer` para modificar asistentes.
+This skill is the foundation the **continuous-improvement** and **quality-engineer** skills build
+on to modify assistants.

@@ -6,12 +6,18 @@ description: >
   Also the end-to-end loop to debug and fix incorrect assistant behaviour
   starting from a conversation ID: root-cause it, validate a fix via overrides
   without saving a version, hand off to the human, and add regression evals.
+  Also simulates an assigned task end to end (assign it, let it open the
+  conversation, drive it to done/failed).
   Use when asked to test an assistant, create QA scenarios, run evals,
   check assertion pass rates, verify assistant behavior, or investigate a
   conversation where the assistant misbehaved.
 ---
 
 # Quality Engineer
+
+> **Script paths** like `scripts/qa.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/qa.py …`.
 
 Create test cases, run evaluations, and simulate conversations to verify AI assistant behavior. All API calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
@@ -257,9 +263,11 @@ python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
 # Trigger a run with model overrides + parallelism
 python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
     --model openai-direct/gpt-4o-mini \
-    --simulator-model anthropic/claude-sonnet-4 \
-    --judge-model openai/gpt-4o \
     --concurrency 4
+
+# Every text assertion graded (and explained) by the LLM judge
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
+    --judge-mode llm
 
 # List eval runs
 python3 scripts/qa.py runs list PLAYBOOK_BASE_ID
@@ -285,6 +293,10 @@ python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Hi" \
 # Chat with MOCKED tool responses (stub Slack / KB / API tools — admin only)
 python3 scripts/qa.py chat PLAYBOOK_BASE_ID --message "Quiero un reembolso de ORD-99999" \
     --tool-mocks-file ./mocks.json
+
+# Simulate an ASSIGNED TASK: assign it, then let it open the conversation
+# (empty message on purpose — see "Simulating an assigned task")
+python3 scripts/qa.py chat PLAYBOOK_BASE_ID --task tsk_7f3ab2c19d04 --message ""
 
 # Dry-run a candidate eval case WITHOUT persisting it (validate the case
 # definition before committing it via `cases create`)
@@ -398,13 +410,38 @@ If the dry-run passes and the conversation looks right, persist the case via `ca
 
 ### Model overrides
 
-Three independent model knobs control different LLM calls during an eval. All default to the playbook's configured model (or the eval-system env default for simulator/judge), and all accept the same OpenRouter-compatible syntax.
+Three independent model knobs control different LLM calls during an eval. The assistant defaults to the playbook's configured model; simulator and judge default to the platform's eval defaults. All accept the same OpenRouter-compatible syntax.
 
 | Flag | What it controls | Default |
 |---|---|---|
 | `--model` | The **assistant** LLM (the playbook agent under test) | Playbook's configured model |
-| `--simulator-model` | The LLM that role-plays the **user** in each case | `anthropic/claude-sonnet-4` (env: `EVAL_SIMULATOR_MODEL`) |
-| `--judge-model` | The LLM that grades **text-type** assertions. Structured assertions (`tool_called`, `handoff_to_agent`, etc.) run deterministic checks and ignore this. | `openai/gpt-4o` (env: `EVAL_EVALUATOR_MODEL`) |
+| `--simulator-model` | The LLM that role-plays the **user** in each case | Platform eval default |
+| `--judge-model` | The LLM that grades **text-type** assertions. Structured assertions (`tool_called`, `handoff_to_agent`, etc.) run deterministic checks and ignore this. | Platform eval default |
+| `--judge-mode` | **Which** judge decides text assertions: `llm`, `jev_then_llm` or `shadow` — see below | `jev_then_llm` where available, else `llm` |
+
+Leave simulator and judge unset unless you have a reason: the defaults change as models improve,
+and a pinned override keeps an old model.
+
+#### Judge mode: why some passes have no explanation
+
+By default (where available), text assertions first go to **jev**, a fast classifier judge: one
+call per case scores every text assertion. jev only ever settles a **confident pass**
+(probability ≥ 0.8 with the default thresholds); fails, uncertain answers and audit samples go to
+the LLM judge exactly as before. **A pass settled by jev carries no LLM `explanation`** — that is
+expected, not a bug. Check `judged_by` on each assertion result:
+
+| Field | Meaning |
+|---|---|
+| `judged_by` | `jev` (a confident pass jev settled on its own, no explanation) or `llm` |
+| `jev_probability` | jev's probability (0–1) that the criterion holds |
+| `jev_confidence` | Derived confidence of jev's call |
+| `escalated` | `true` when jev's answer wasn't enough and the LLM judge decided |
+
+Modes: `llm` (the LLM judge grades everything — use it when you need an explanation on every
+assertion), `jev_then_llm` (default), `shadow` (the LLM decides everything; jev's numbers are
+recorded for comparison). Tunables: `jev_pass_threshold` (0.5), `jev_confidence_floor` (0.6),
+`jev_audit_rate` (0 — fraction of jev passes also sent to the LLM, whose verdict wins).
+Asking for a jev mode where jev isn't available is a `422`.
 
 **Syntax** (same for all three flags):
 
@@ -424,7 +461,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 |---|---|
 | `anthropic/claude-sonnet-4.6` | Newest Sonnet. Default for the assistant in most scenarios. |
 | `anthropic/claude-sonnet-4.5` | One rev behind 4.6. |
-| `anthropic/claude-sonnet-4` | Eval-system default for the **simulator** (`EVAL_SIMULATOR_MODEL`). |
+| `anthropic/claude-sonnet-4` | Older Sonnet. |
 | `anthropic/claude-3.5-sonnet` | Stable older Sonnet; cheap baseline for diffs. |
 | `anthropic/claude-haiku-4.5` | Newest Haiku — fast / cheap. Good for high-volume runs or the simulator when latency matters more than nuance. |
 
@@ -437,7 +474,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 | `openai/gpt-5.2-chat` | Stable GPT-5 chat variant. |
 | `openai/gpt-4.1-mini` | Solid mid-tier. |
 | `openai/gpt-4.1-nano` | Smallest GPT-4.1 — cheap. |
-| `openai/gpt-4o` | GPT-4o via the OpenRouter pool. Default for the **judge** (`EVAL_EVALUATOR_MODEL`). |
+| `openai/gpt-4o` | GPT-4o via the OpenRouter pool. Older judge / assistant. |
 | `openai/gpt-4o-mini` | Cheap judge / assistant. |
 | `openai-direct/gpt-4o` | Same model via the **direct** OpenAI provider (skips OpenRouter pool — lower latency, different billing). |
 | `openai-direct/gpt-4o-mini` | Direct-provider 4o-mini. |
@@ -452,7 +489,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 | `google/gemini-2.0-flash-001` | Previous Flash generation. |
 | `google/gemini-3-flash-preview` | Gemini 3 Flash preview — may change. |
 
-> **Gemini caveat**: there's a known tool-calling bias in this codebase ([docs/gemini-tool-call-bias.md](https://github.com/surfingdev/kaptbase/blob/main/docs/gemini-tool-call-bias.md)). Prefer Sonnet for the **assistant** when the playbook leans heavily on tools.
+> **Gemini caveat**: Gemini models show a known bias in tool calling on this platform. Prefer Sonnet for the **assistant** when the playbook leans heavily on tools.
 
 #### Reasoning effort suffix (GPT-5 family)
 
@@ -638,6 +675,44 @@ Both endpoints accept a `playbook_override` object on the request body. The CLI 
 ```
 
 Any subset of these keys is valid — omitted keys keep the saved playbook value.
+
+---
+
+## Simulating an assigned task
+
+A **task** is finite work an assistant is assigned and drives to completion in one conversation
+(*collect these documents*, *regularize this debt*). Unlike a skill it doesn't wait for a
+matching situation — it is already running, and the assistant is the one who opens it. Testing
+one means starting the conversation the way production does: **assign the task, then run a turn
+with no user message.**
+
+```bash
+# The turn nobody asked for — empty message, the task drives it
+python3 scripts/qa.py chat BASE_ID --task tsk_7f3ab2c19d04 --message ""
+
+# Then play the customer on the same conversation, WITHOUT --task
+python3 scripts/qa.py chat BASE_ID --conversation-id qa_abc123 --message "ahí te mando el dni"
+```
+
+`--task` assigns first (`POST /playbooks/BASE_ID/conversations/{id}/task?version=active`) and
+then chats. Every turn prints the assistant's own read on the task — `status` (`in_progress` /
+`done` / `failed`) and one sentence of `reason`.
+
+- **Send `--task` on the first call only.** Re-assigning while it is in progress is a harmless
+  no-op, but re-sending it *after* a terminal status deliberately **restarts** the task. A
+  different task while one is live is a **409**.
+- Task ids come from the assistant's catalog (`GET /playbooks/BASE_ID/latest` → `.tasks`).
+- `qa.py chat` conversations are `is_eval`, so they never qualify for the follow-up cron.
+
+**What to check, in this order:** it opens *with* the task (not "¿en qué te puedo ayudar?"); it
+asks one thing at a time; it reaches `done` with a cooperative customer; it reaches `failed`
+with a refusing one (a task that can't fail chases forever); it survives an off-topic detour and
+comes back; and it still sounds like the assistant.
+
+If it never reaches a terminal status, the problem is almost always the task text, not the
+assistant: the `{{success}}` / `{{failure}}` pills mark where a task ends, and one that has
+neither cannot report anything but `in_progress`. Authoring rules live in the **builder** skill
+(`references/tasks.md`).
 
 ---
 
@@ -1689,14 +1764,24 @@ The most common request — full detail in the [QA Practice Workflow](#qa-practi
 8. **Human applies the new version** — deliver the final content, wait for confirmation + the new version ID
 9. **Eval coverage**: persist case(s) sized to the fix, run only them against the new version, then offer a full-suite run to catch regressions.
 
-## Gotchas adicionales
+## Additional gotchas
 
-- **In-memory overrides no crean versión en el historial.** Es el punto clave: podés validar un cambio sin polutar el historial de versiones. Siempre validar con override antes de publicar versión.
-- **`dry_run` no ejecuta tools reales** (APIs externas, etc.). Si el asistente usa API tools, los resultados en dry_run son simulados — el eval puede pasar en dry_run y fallar en producción si la tool devuelve datos reales distintos.
-- **Los conversation IDs de producción son los más valiosos para evals.** Un eval construido sobre una conversación real donde el agente falló es el mejor regression test.
-- **Assertion de "tone" es siempre subjetiva.** No poner assertions de tono en el grader automático — solo calidad objetiva: ¿respondió la pregunta correctamente?, ¿derivó cuando correspondía?
+- **In-memory overrides do not create a version.** That is the whole point: you can validate a
+  change without polluting the version history. Always validate with an override before
+  publishing a version.
+- **A dry run DOES call real tools unless you mock them.** There is no automatic sandbox: mocks
+  are installed only for the tools a case declares in `tool_mocks`; every other tool executes
+  for real against the live external API. Before dry-running an assistant with write-capable
+  tools (closing a ticket, booking a meeting, writing to a CRM), mock them explicitly — see
+  [Mocking Tools](#mocking-tools-tool_mocks).
+- **Enrichment tools are not mockable at all.** They run before the agent's first turn, outside
+  the `tool_mocks` mechanism.
+- **Production conversation IDs make the best evals.** A case built from a real conversation
+  where the assistant failed is the strongest regression test you can write.
+- **"Tone" assertions are always subjective.** Keep them out of the automatic grader — assert
+  objective quality only: did it answer the question, did it escalate when it should have.
 
-## Dependencias
+## Related skills
 
-- `customer-success:builder` — para aplicar los fixes validados.
-- `customer-success:continuous-improvement` — el loop proactivo que usa quality-engineer como herramienta de validación.
+- **builder** — to apply the fixes you validated.
+- **continuous-improvement** — the proactive loop that uses this skill as its validation step.

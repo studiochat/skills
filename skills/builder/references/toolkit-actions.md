@@ -136,6 +136,7 @@ Act on the *current* Intercom conversation and its contact.
 | Action | What it does | Key params |
 |---|---|---|
 | **`INTERCOM_CONVERSATIONS_FIND_DUPLICATES`** | Lists the user's open conversations — call it *before* creating a ticket/handoff to avoid duplicates. | `contact_email` · `state` (pin-only) |
+| **`INTERCOM_CONVERSATIONS_GET_STATUS`** | Reads one conversation's current state (open / closed / snoozed) and who it is assigned to. Answers "is that OTHER thread still open?" about a conversation surfaced by the person's history. | `conversation_id` (optional — leave empty and the assistant passes one, the usual setup; or pin a `{{deps.*}}` path to always check the conversation it points at) |
 | **`INTERCOM_CONVERSATIONS_CLOSE_CONVERSATION`** | Closes the current conversation, optionally leaving an internal note first. | `closing_note` (optional; LLM or pinned) |
 | **`INTERCOM_CONVERSATIONS_SET_HIGH_PRIORITY`** | Flags the conversation high-priority via a tag + an Intercom Workflow. | `tag_name` (pin-only — the tag your Workflow listens on) |
 | **`INTERCOM_CONVERSATIONS_SET_ATTRIBUTES`** | Sets custom attributes on the conversation and/or the contact (user). | dynamic attributes (from `settable_attributes`); each carries an `attr_model` = `conversation` \| `contact`. Pin the ones that are fixed, let the assistant decide the rest |
@@ -340,6 +341,73 @@ Notes:
 **In instructions:** *"Before answering pricing questions, check the beta whitelist with
 `{{ custom_tool: find_row_c4d2e }}`; if `found` is false, offer the waitlist and register them
 with `{{ custom_tool: add_row_88a1b }}`."*
+
+### Kommo — `KOMMO` (api_key: subdomain + access_token)
+Update the Kommo (amoCRM) **lead behind the current conversation**. Credentials: the account
+subdomain (`cabildo885` — the full URL works too) and the long-lived access token of a Kommo
+**private integration** (Settings → Integrations → Create integration → *Keys and scopes*), with
+CRM read+write scopes. The lead id is resolved from the conversation context; it is never a
+parameter and the assistant never sees it.
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`KOMMO_SET_FIELDS`** | Writes custom field values on the lead and/or its main contact. | the account's fields as dynamic children (from `settable_fields`); each carries an `attr_model` = `lead` \| `contact`. Pin the fixed ones, let the assistant decide the rest |
+| **`KOMMO_ADD_TAGS`** | Adds tag(s) to the lead. Existing tags are kept; unknown names are created by Kommo. | `tag_names` (pin-only, comma-separated) |
+| **`KOMMO_MOVE_LEAD_STAGE`** | Moves the lead to one fixed pipeline stage. Takes no runtime arguments. | `pipeline_id` (pin-only, from `pipelines`) · `status_id` (pin-only, from `pipeline_statuses?pipeline_id=<id>`) |
+
+**Discovery:**
+
+```bash
+GET .../custom-toolkits/KOMMO/metadata/settable_fields
+#    → param descriptors, key = "lead::<field_id>" | "contact::<field_id>",
+#      label = the Kommo field name, plus `unsupported`+`unsupported_reason` on the ones
+#      this toolkit deliberately won't write
+GET .../custom-toolkits/KOMMO/metadata/pipelines                          → [{id, name}]
+GET .../custom-toolkits/KOMMO/metadata/pipeline_statuses?pipeline_id=<id> → [{id, name}]
+GET .../custom-toolkits/KOMMO/metadata/lead_tags                          → [{id, name}]  (discovery only)
+```
+
+**Config shapes:**
+
+```json
+// SET_FIELDS — field keys are namespaced by entity; the bare id is NOT unique
+{
+  "params": { "lead::862646": "3 ambientes" },
+  "dynamic_schema": [
+    { "key": "lead::1994671", "name": "1994671", "label": "Proyecto", "type": "text",
+      "data_type": "string", "attr_model": "lead",
+      "hint": "The development the person asked about, as they named it" }
+  ]
+}
+
+// ADD_TAGS
+{ "params": { "tag_names": "calificado, interesado" } }
+
+// MOVE_LEAD_STAGE — one pill per stage
+{ "params": { "pipeline_id": "14192904", "status_id": "109577784" } }
+```
+
+Notes:
+- **Leads and contacts have independent custom-field namespaces**, so keys are
+  `lead::<id>` / `contact::<id>`. Contact fields resolve the lead's main contact at runtime.
+- **`MOVE_LEAD_STAGE` is one pill per stage** — the destination is pinned, so the tool takes no
+  arguments and its description names the target stage. Wire each pill where the instructions
+  describe that qualification. Both ids are always sent: the built-in won/lost statuses reuse
+  ids `142`/`143` in *every* pipeline, so a bare `status_id` is ambiguous.
+- **Tags can only be added, never removed** — Kommo has no remove-tag operation.
+- **Some field types are intentionally not writable** and come back `unsupported` with a reason:
+  `tracking_data` (utm_*, gclid — Kommo fills them), `multitext` (contact Phone/Email — they hold
+  several typed values and a write replaces the whole list, erasing the others), and the
+  composite/catalog types (`smart_address`, `legal_entity`, `linked_entity`, `chained_list`,
+  `category`, `items`, `file`, …).
+- Date fields take ISO 8601 from the assistant and are converted to Unix timestamps. List fields
+  expose their option **names**; the runtime maps them to `enum_id`.
+- All three actions update an existing record, so re-running one converges on the same state —
+  tags and stage report the no-op instead of failing.
+
+**In instructions:** *"When the person tells you their budget and which development they want,
+record it with `{{ custom_tool: guardar_datos_lead_a1b2c }}`. If they ask for a visit this week,
+move them with `{{ custom_tool: mover_a_caliente_d3f4a }}`."*
 
 ---
 

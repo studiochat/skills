@@ -26,9 +26,12 @@ Returns: `201` with report definition.
 
 ### List Reports
 ```
-GET /projects/{project_id}/reports
+GET /projects/{project_id}/reports?include_one_off=false
 ```
 Returns: `{ "items": [...], "total": N }`
+
+One-off reports are hidden by default (they are not part of the project's report catalog).
+Pass `include_one_off=true` to see them.
 
 ### Get Report
 ```
@@ -45,7 +48,7 @@ Body: any subset of create fields.
 ```
 DELETE /reports/{report_id}
 ```
-Returns: `204`
+Returns: `204`. **Immediate — not approval-gated**, including for `sbs_` keys.
 
 ## Report Runs
 
@@ -61,6 +64,60 @@ Optional body:
 - Cron reports: auto-calculated from cron interval (body ignored)
 
 Returns: `202` with run object (status: pending).
+
+### One-off report (define and run in one call)
+```
+POST /projects/{project_id}/reports/one-off
+```
+```json
+{
+  "instructions": "What came in over the last 24 hours, and why did it hand off?",
+  "name": "Optional label",
+  "playbook_base_ids": ["base_id_1"],
+  "time_window_hours": 24
+}
+```
+
+For the question asked in a thread that wants the report **pipeline** (Sami, the Block Kit
+artifact, the branded PDF) and none of the report **lifecycle**. The definition is written with
+`is_one_off=true`: it never appears in the project's report list, has no schedule and no
+delivery target, and exists only so the run, the artifact and the cost line have something to
+point at.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `instructions` | string | **Required**, non-empty |
+| `name` | string | Optional label (max 255) |
+| `playbook_base_ids` | array | Which assistants to include |
+| `time_window_days` | int | 1–366 |
+| `time_window_hours` | int | 1–744. Exists because "the last 24 hours" is what a person actually asks for |
+
+Pass **one** of `time_window_days` / `time_window_hours`, or neither (defaults to 7 days).
+Sending both is a `400`.
+
+Returns `202` with `{report, run}`. Poll the run, then collect the PDF from
+`/reports/runs/{run_id}/pdf`.
+
+Same executor, same per-run cost cap and same foreground session as a manual "Run now" — the
+only thing this route adds is not having to create, run, and remember to delete.
+
+### Retry a failed run
+```
+POST /reports/runs/{run_id}/retry
+```
+Re-runs with the **same** `window_start` / `window_end`. Returns `202`.
+
+Only runs with status `failed` can be retried — anything else is a `400`.
+
+### Cancel an in-flight run
+```
+POST /reports/runs/{run_id}/cancel
+```
+Allowed only while the run is `pending` or `running`.
+
+The cancel sends `user.interrupt` and archives the upstream session **before** marking the run
+cancelled. If either upstream call fails the endpoint answers `502` rather than misleadingly
+reporting the run as cancelled — offer a retry in that case.
 
 ### List Runs
 ```

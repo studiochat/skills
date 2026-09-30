@@ -14,6 +14,10 @@ description: >
 
 # Continuous Improvement
 
+> **Script paths:** this skill has no scripts of its own. Where it runs `../builder/scripts/api.py`,
+> that path is relative to this skill's folder and needs the `builder` skill installed next to it
+> (the plugin install does this for you).
+
 Ship a behaviour change to an assistant: add or change a policy in the instructions or
 the casuísticas (skills), validate it without polluting version history, push it through
 the approval gate, and close the loop with eval coverage. All API calls are authenticated
@@ -199,7 +203,7 @@ hand-off. When the change is validated, **push it via [builder](../builder/SKILL
 
 **Every instruction or skill modification you push generates an approval — one per change —
 that a human must approve before it goes live.** Sandbox (`sbs_`) callers get a `202` with
-`{"approval_id": "...", "status": "pending", "message": "Request queued for admin approval."}`
+`{"approval_id": "...", "approval_url": "https://…", "status": "pending", "message": "..."}`
 instead of an immediate write. So:
 
 - Push **one change per logical edit** so each approval is reviewable on its own (don't bundle a
@@ -208,7 +212,8 @@ instead of an immediate write. So:
   payload, and it **renders as Markdown**, so make it structured and skimmable:
 
   ```bash
-  python3 scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
+  # builder's API client — this skill has no scripts of its own
+  python3 ../builder/scripts/api.py "/approvals/APPROVAL_ID/description" -X PATCH --body '{
     "description": "Resumen en una línea.\n\n## Qué cambia\n...\n\n## Por qué\n... (números/evidencia)\n\n## Impacto y riesgo\n..."
   }'
   ```
@@ -218,6 +223,8 @@ instead of an immediate write. So:
   policy being added/changed, what motivated it (the user ask, the trend, the conversation
   with real numbers), and the observable before → after. For text edits, embed a
   `[[before]]/[[after]]` diff block (see the builder skill). Pending-only (409 once reviewed).
+- **Give the user the `approval_url`** from each 202 — it opens that approval directly in the
+  dashboard.
 - **Confirm each change with the user before pushing it** (builder confirms every write anyway),
   then **wait for the human to approve** the queued change(s) and for the **new version to go
   live**. Get the new version ID.
@@ -352,13 +359,22 @@ This skill orchestrates three others — reach for them rather than re-deriving:
 
 ## Gotchas
 
-- **"Casuística" y "skill" son lo mismo en Studio Chat.** El término interno del API es `skill`, el término que usan los usuarios es "casuística". No confundir con los skills de Claude Code.
-- **Las instrucciones base se inyectan en CADA conversación — son caras.** Si el comportamiento aplica solo a un escenario, va en una casuística, no en las instrucciones base. Instrucciones base solo para reglas universales.
-- **Validar con in-memory override ANTES de publicar versión.** Crear una versión nueva crea historial que no se puede borrar fácilmente. Siempre validar con `dry_run`/override primero.
-- **Con sandbox key (`sbs_`), los writes son 202 pending.** Siempre buscar el `approval_id` en la respuesta y adjuntar descripción al approval inmediatamente.
-- **`playbook_base_id` ≠ `playbook_id`.** El `base_id` es estable a través de versiones. Usar `base_id` para gestión de skills/casuísticas, y `playbook_id` solo cuando necesitás una versión específica.
+- **"Casuística" and "skill" are the same thing in Studio Chat.** The API calls it a `skill`;
+  operators call it a *casuística*. Not to be confused with Claude Code skills.
+- **Base instructions are injected into EVERY conversation — they are expensive.** If a
+  behaviour only applies to one scenario it belongs in a casuística, not in the base
+  instructions. Reserve the base for universal rules.
+- **Validate with an in-memory override BEFORE publishing a version.** A new version creates
+  history that is not easily removed. Always validate with `dry_run` / override first — and
+  remember a dry run calls **real** tools unless the case mocks them.
+- **Assistant writes queue for approval; most other writes do not.** Instruction, skill,
+  settings and active-version changes answer `202` with an `approval_id` for `sbs_` callers —
+  attach a description immediately. Knowledge-base writes, reports, alerts, monitors, evals and
+  example blocks execute directly. The full list is in the `builder` skill.
+- **`playbook_base_id` ≠ `playbook_id`.** The `base_id` is stable across versions: use it for
+  managing skills/casuísticas, and `playbook_id` only when you need one specific version.
 
-## Dependencias
+## Related skills
 
-- `customer-success:builder` — mecánica de CRUD de instrucciones, casuísticas, KB y examples.
-- `customer-success:quality-engineer` — validación con in-memory overrides y evals de regresión.
+- **builder** — the CRUD mechanics for instructions, casuísticas, KBs and examples.
+- **quality-engineer** — validation with in-memory overrides and regression evals.

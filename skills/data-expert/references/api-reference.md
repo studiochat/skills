@@ -31,10 +31,72 @@ Replace `{pid}` with `$STUDIO_PROJECT_ID` in paths.
 - [Resource Analytics — API Tool Usage](#resource-analytics--api-tool-usage)
 - [Resource Analytics — Toolkit Usage](#resource-analytics--toolkit-usage)
 - [Resource Analytics — Skill Usage](#resource-analytics--skill-usage)
+- [Resource Analytics — Follow-ups](#resource-analytics--follow-ups)
+- [Resource Analytics — KB Searches](#resource-analytics--kb-searches)
+- [Resource Analytics — API Tool Failures](#resource-analytics--api-tool-failures)
 - [CSAT Analytics](#csat-analytics)
 - [Conversion Metrics](#conversion-metrics)
 - [Custom Toolkits Reference](#custom-toolkits-reference)
-- [Analyst Conversations](#analyst-conversations)
+
+---
+
+## Timezone: your numbers vs. the dashboard
+
+**Every analytics endpoint that buckets by day, and every date-only window, accepts a
+`timezone` query param — and the API default is `UTC`.**
+
+The dashboard sends the operator's **browser** zone on every analytics call. So the same window
+returns *different daily numbers* over the API than on screen, and nothing in the response says
+so. For an Argentine or Colombian account that is three to five hours of traffic moving across
+each edge of the window, plus every day bucket shifted.
+
+**Always send `timezone` explicitly**, and use the same one the account works in:
+
+```bash
+fetch.py "/projects/$STUDIO_PROJECT_ID/conversations/analytics" \
+  --params start_date=2026-09-01 end_date=2026-09-07 timezone=America/Argentina/Buenos_Aires
+```
+
+Accepts any IANA zone (`America/Argentina/Buenos_Aires`, `America/Mexico_City`, `Europe/Madrid`).
+
+Two things to know about the semantics:
+
+- **Filtering happens in UTC; only the bucketing happens in your zone.** The window bounds are
+  converted once at the edge, so range scans still use the existing indexes.
+- **`time_series[].timestamp` comes back as a naive wall clock in the zone you asked for** — it
+  is a bucket key to render verbatim, **not** an instant to convert again. Converting it a
+  second time shifts every chart.
+
+Endpoints that take `timezone`: `/conversations`, `/conversations/analytics`,
+`/conversations/summaries`, `/conversations/metrics/aggregate`, `/metrics/aggregate`,
+`/csat/analytics`, `/conversion-metrics/{slug}/analytics`, and every
+`/analytics/*` resource endpoint. `/task-runs` does not — it has no day buckets.
+
+---
+
+## `tag_filter`: structured tag logic
+
+`tags` is comma-separated and **AND-only**. When you need OR or NOT, send `tag_filter` instead:
+a JSON-encoded expression accepted by the conversation endpoints and every resource-analytics
+endpoint.
+
+- Leaf: `{"type": "tag", "value": "escalado", "negate": false}`
+- Group: `{"type": "group", "op": "and" | "or", "children": [...]}`
+
+```bash
+# escalado AND (vip OR enterprise) AND NOT resolved
+fetch.py "/projects/$STUDIO_PROJECT_ID/conversations" --params 'tag_filter={
+  "type":"group","op":"and","children":[
+    {"type":"tag","value":"escalado"},
+    {"type":"group","op":"or","children":[
+      {"type":"tag","value":"vip"},{"type":"tag","value":"enterprise"}]},
+    {"type":"tag","value":"resolved","negate":true}]}'
+```
+
+Bounds: max depth 6, max 64 nodes. Malformed JSON or a schema violation is a `400`.
+
+A named, reusable combination of these can be stored per account as a **saved filter** — see the
+`builder` skill's API reference.
 
 ---
 
@@ -175,6 +237,10 @@ Paginated list of customer conversations with comprehensive filtering.
 | `skill_name` | string | | Only conversations that loaded this skill (uses efficient EXISTS subquery) |
 | `sort_by` | string | `last_message_at` | `last_message_at`, `first_message_at`, or `message_count` |
 | `sort_order` | string | `desc` | `desc` or `asc` |
+| `date_field` | string | `last_message_at` | Which timestamp `start_date`/`end_date` filter on: `last_message_at` or `first_message_at` |
+| `tag_filter` | JSON | | Structured AND/OR/NOT tag expression — see [tag_filter](#tag_filter-structured-tag-logic). Use instead of `tags` when you need OR or NOT |
+| `external_user_id` | string | | Only conversations bound to this end user (the platform-native user id the channel supplied) |
+| `timezone` | string | `UTC` | IANA zone for date windows and day buckets — see [Timezone](#timezone-your-numbers-vs-the-dashboard) |
 
 **Response fields per conversation:**
 
@@ -186,7 +252,8 @@ inbox_name                  string  Channel name (e.g., "Website Chat")
 playbook_name               string  Last active playbook name
 playbook_version            int     Last active playbook version number
 playbooks_info              array   All playbooks that participated [{id, name, version}]
-message_count               int     Total messages in conversation
+message_count               int     Messages people saw: customer turns + assistant
+                                    replies (see note below)
 first_message_at            string  ISO 8601 timestamp of first message
 last_message_at             string  ISO 8601 timestamp of last message
 first_user_message          string  Text of the customer's first message
@@ -214,6 +281,12 @@ model                       string  LLM model used (e.g., "gpt-4o-mini")
 winback_sent_at             string  ISO 8601 timestamp when winback was sent (null if not sent)
 context                     object  Context dict passed to the agent (contact info, etc.)
 ```
+
+> **`message_count` counts what people said** — customer turns and assistant replies. Tool
+> results, internal markers and the intermediate rows an assistant writes while calling tools
+> are not counted. This rule applies from **September 8, 2026**; earlier conversations were not
+> recounted and keep an older, higher count that included those rows, so an average over a range
+> crossing that date drops for that reason alone — compare like with like.
 
 **Pagination:** Response includes `total`, `limit`, `offset`. Use `offset += limit` to page.
 
@@ -251,7 +324,7 @@ resources_label             string  "irrelevant", "partial", or "relevant" (null
 first_user_message          string  Customer's first message
 tags                        array   List of tag strings
 has_handoff                 bool    Whether escalated to human
-message_count               int     Total messages
+message_count               int     Customer + assistant messages (see note above)
 last_message_at             string  ISO 8601 timestamp of last message
 skills                      array   Skill names loaded during the conversation (null if none)
 user_intent                 string  Short phrase: what the user wanted (null if unscored)
@@ -639,12 +712,6 @@ enabled             bool      Whether case is active
 
 Returns a single eval case with full details.
 
-### Export Eval Cases (YAML)
-
-`GET /playbooks/{base_id}/eval-cases/export-yaml`
-
-Returns `yaml_content` string with all cases in YAML format for version control.
-
 ---
 
 ## Eval Runs
@@ -960,6 +1027,112 @@ Lightweight per-skill daily counts for sparkline charts.
 
 ---
 
+## Resource Analytics — Follow-ups
+
+`GET /projects/{pid}/analytics/followups`
+
+The per-attempt ledger behind follow-ups (winback): totals, the funnel by attempt, a time
+series, and the recent sends.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rule_id` | string | | Filter to one follow-up rule |
+| `playbook_base_id` | string | | Filter to one assistant |
+| `start_date` / `end_date` | date | | `YYYY-MM-DD` |
+| `search` | string | | Substring match in `conversation_id` |
+| `tags` | string | | Comma-separated (AND logic) |
+| `tag_filter` | JSON | | `TagExpr` (AND/OR/NOT) |
+| `limit` / `offset` | int | 50 / 0 | Pagination of `recent` (max 500) |
+| `timezone` | string | UTC | IANA zone for day buckets and date windows |
+
+Response:
+
+```
+total_sent      int    Attempts sent in the window
+answered        int    Attempts that got a reply
+conversations   int    Distinct conversations with >=1 attempt (top of the funnel)
+by_step         array  {step_index, delay_minutes, sent, answered}
+time_series     array  Per-day points
+recent          array  {id, conversation_id, rule_id, step_index, delay_minutes,
+                        transport, answered_at, created_at}
+```
+
+**Four things you cannot infer from the payload:**
+
+1. **`by_step` has one row per (attempt, delay it fired with)** — not per attempt. A rhythm
+   edited inside the window returns the same `step_index` twice, once per delay. Those rows are
+   there to be **compared, not averaged**.
+2. **Attribution is last-touch.** Earlier attempts on a conversation stay `answered: 0` on
+   purpose — only the attempt that immediately preceded the reply is credited.
+3. **A null `rule_id` / `delay_minutes`** is a nudge older than the rules: counted in the totals,
+   absent from the sparklines.
+4. **The reply rate is not returned.** Compute it yourself as `answered / total_sent`.
+
+`conversations` is the top of the funnel; `by_step[0].sent` is normally the same number.
+
+### Follow-up sparklines
+`GET /projects/{pid}/analytics/followups/sparklines`
+
+### Follow-up conversion is three different numbers
+
+Asked "what's the conversion on our follow-ups", three endpoints answer with three
+**denominators**. Say which one you used:
+
+| Endpoint | Measures | Denominator |
+|---|---|---|
+| `/conversations/analytics` → `winback_sent_count`, `winback_answered_count`, `winback_conversion_rate` | The dashboard's headline conversion card | **conversations** nudged (last-touch) |
+| `/analytics/followups` → `total_sent` / `answered` / `by_step` | The per-attempt funnel | **attempts** |
+| `/conversion-metrics/{slug}/analytics` | Business conversion events (sales, signups) the account pushes | events per conversation |
+
+---
+
+## Resource Analytics — KB Searches
+
+`GET /projects/{pid}/analytics/kb-searches`
+
+Every logged KB search grouped by (lowercased) query text — **this is how you find knowledge-base
+gaps**: frequent queries the KB answers poorly or not at all.
+
+Per query it returns how often it was searched, the avg/min top relevance score, and how many
+times it returned nothing.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `kb_id` | string | | Scope to one KB (the analysis is typically per-KB) |
+| `start_date` / `end_date` | date | | `YYYY-MM-DD` |
+| `max_avg_score` | float | | Only queries whose avg top score is below this (or that returned nothing). **This is the gap filter** |
+| `min_count` | int | | Only queries searched at least this often — drops the one-off long tail |
+| `rerank_used` | bool | | Filter by scoring mode (`true` = rerank, `false` = cosine) |
+| `sort` | string | `frequency` | `frequency` \| `score` (lowest avg top score first — no-result queries rank worst) \| `zero_results` \| `last_seen` |
+| `limit` / `offset` | int | 50 / 0 | Max 500 |
+| `timezone` | string | UTC | IANA zone |
+
+> **Scores are not comparable across scoring modes.** Pass `rerank_used` when you compare avg
+> scores, or you are averaging two different scales.
+
+---
+
+## Resource Analytics — API Tool Failures
+
+`GET /projects/{pid}/analytics/api-tool-failures`
+
+**Failed** API-tool calls only, each with its error payload, for diagnosis. Successful calls and
+their response payloads (which may hold sensitive data) are never included.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_tool_id` | string | | Filter to one API tool |
+| `search` | string | | Substring match in the error message **or** the error payload |
+| `start_date` / `end_date` | date | | `YYYY-MM-DD` |
+| `limit` / `offset` | int | 50 / 0 | Max 500 |
+| `timezone` | string | UTC | IANA zone |
+
+Returns per-day failure counts and which tools fail, plus `items` (newest first, paginated) —
+each carrying the error message, the error response body, the request that was sent, and the
+conversation it happened in.
+
+---
+
 ## CSAT Analytics
 
 `GET /projects/{pid}/csat/analytics`
@@ -1191,26 +1364,3 @@ fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
 fetch.py "/projects/$STUDIO_PROJECT_ID/analytics/toolkits" \
   --params toolkit_slug=INTERCOM_TICKETS param_filter=ticket_type_id:67
 ```
-
----
-
-## Analyst Conversations
-
-Internal Analyst conversations (separate from customer conversations).
-
-### List Analyst Conversations
-
-`GET /analyst/conversations`
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `limit` | int | 50 | Max conversations to return |
-| `offset` | int | 0 | Pagination offset |
-
-Returns `conversations` array and `total` count.
-
-### Get Analyst Messages
-
-`GET /analyst/conversations/{conversation_id}/messages`
-
-Returns parsed messages with tool calls and explanations.

@@ -1,0 +1,17 @@
+{
+  "name": "studiochat",
+  "description": "Studio Chat skills for building, analyzing, testing and reporting on your AI assistants",
+  "owner": {
+    "name": "Studio Chat",
+    "email": "hey@studiochat.io",
+    "url": "https://studiochat.io"
+  },
+  "plugins": [
+    {
+      "name": "studiochat",
+      "source": "./",
+      "description": "Build, analyze, test and report on Studio Chat assistants: configuration, conversation analytics, evals and scheduled reports",
+      "category": "productivity"
+    }
+  ]
+}
