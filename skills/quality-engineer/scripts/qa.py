@@ -18,6 +18,7 @@ Usage:
     qa.py runs create PLAYBOOK_BASE_ID --playbook-id ID [--context '{}']
                                        [--case-ids id1,id2,...] [--concurrency N]
                                        [--model M] [--simulator-model M] [--judge-model M]
+                                       [--judge-mode llm|jev_then_llm|shadow]
                                        [--instructions-file FILE | --instructions TEXT]
                                        [--skills-file FILE] [--examples-file FILE]
                                        [--kb-ids id1,id2] [--api-tools t1,t2]
@@ -317,6 +318,7 @@ def cmd_runs_create(
     simulator_model=None,
     judge_model=None,
     tool_mocks=None,
+    judge_mode=None,
 ):
     body = {"playbook_id": playbook_id}
     if context:
@@ -336,6 +338,8 @@ def cmd_runs_create(
         body["simulator_model"] = simulator_model
     if judge_model:
         body["judge_model"] = judge_model
+    if judge_mode:
+        body["judge_mode"] = judge_mode
     # NOTE: run-level tool_mocks are NOT supported by the BE — per-case
     # tool_mocks live on the case body itself (``EvalCase.tool_mocks``).
     # If the QA caller wants to mock during a run, the right place is the
@@ -699,6 +703,7 @@ def main():
                 model=get_flag("--model"),
                 simulator_model=get_flag("--simulator-model"),
                 judge_model=get_flag("--judge-model"),
+                judge_mode=get_flag("--judge-mode"),
                 tool_mocks=_load_tool_mocks_file(get_flag("--tool-mocks-file")),
             )
         elif action == "list" and len(args) >= 3:

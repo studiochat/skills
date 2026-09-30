@@ -214,13 +214,13 @@ Every endpoint these skills document accepts an `sbs_` key. Two things narrow wh
 
 ## MCP server
 
-There is also a hosted MCP server at **`mcp.studiochat.io`** covering the same ground as these skills — roughly 75 tools across configuration, analytics, QA and reports — with no API key to manage.
+There is also a hosted MCP server at **`mcp.studiochat.io`** covering the same ground as these skills — close to 90 tools across configuration, analytics, QA, reports and media — with no API key to manage.
 
 Any active member of the account can connect; what the connection can do is resolved from the member's account role on **every request**, so promoting or demoting someone takes effect immediately with no reconnect. Admins get the full surface; members get the read tools.
 
 In Claude Code: add the server, then `/mcp` and authenticate through the browser flow.
 
-The MCP is the better door when an agent is doing exploratory work, and it does a few things these skills don't (live API-tool dry runs, a JMESPath tuner, structured tag filters, run-to-run eval diffs). The REST API these skills wrap is the better door for scripted, reproducible automation and for anything running without a human to consent.
+The MCP is the better door when an agent is doing exploratory work, and it does a few things these skills don't (a JMESPath tuner, structured tag filters, run-to-run eval diffs, and managing the media library — the images and files an assistant can send — where it is enabled for your account). The REST API these skills wrap is the better door for scripted, reproducible automation and for anything running without a human to consent.
 
 ## Skill Structure
 

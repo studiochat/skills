@@ -259,9 +259,11 @@ python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
 # Trigger a run with model overrides + parallelism
 python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
     --model openai-direct/gpt-4o-mini \
-    --simulator-model anthropic/claude-sonnet-4 \
-    --judge-model openai/gpt-4o \
     --concurrency 4
+
+# Every text assertion graded (and explained) by the LLM judge
+python3 scripts/qa.py runs create PLAYBOOK_BASE_ID --playbook-id VERSION_ID \
+    --judge-mode llm
 
 # List eval runs
 python3 scripts/qa.py runs list PLAYBOOK_BASE_ID
@@ -404,13 +406,38 @@ If the dry-run passes and the conversation looks right, persist the case via `ca
 
 ### Model overrides
 
-Three independent model knobs control different LLM calls during an eval. All default to the playbook's configured model (or the eval-system env default for simulator/judge), and all accept the same OpenRouter-compatible syntax.
+Three independent model knobs control different LLM calls during an eval. The assistant defaults to the playbook's configured model; simulator and judge default to the platform's eval defaults. All accept the same OpenRouter-compatible syntax.
 
 | Flag | What it controls | Default |
 |---|---|---|
 | `--model` | The **assistant** LLM (the playbook agent under test) | Playbook's configured model |
-| `--simulator-model` | The LLM that role-plays the **user** in each case | `anthropic/claude-sonnet-4` (env: `EVAL_SIMULATOR_MODEL`) |
-| `--judge-model` | The LLM that grades **text-type** assertions. Structured assertions (`tool_called`, `handoff_to_agent`, etc.) run deterministic checks and ignore this. | `openai/gpt-4o` (env: `EVAL_EVALUATOR_MODEL`) |
+| `--simulator-model` | The LLM that role-plays the **user** in each case | Platform eval default |
+| `--judge-model` | The LLM that grades **text-type** assertions. Structured assertions (`tool_called`, `handoff_to_agent`, etc.) run deterministic checks and ignore this. | Platform eval default |
+| `--judge-mode` | **Which** judge decides text assertions: `llm`, `jev_then_llm` or `shadow` — see below | `jev_then_llm` where available, else `llm` |
+
+Leave simulator and judge unset unless you have a reason: the defaults change as models improve,
+and a pinned override keeps an old model.
+
+#### Judge mode: why some passes have no explanation
+
+By default (where available), text assertions first go to **jev**, a fast classifier judge: one
+call per case scores every text assertion. jev only ever settles a **confident pass**
+(probability ≥ 0.8 with the default thresholds); fails, uncertain answers and audit samples go to
+the LLM judge exactly as before. **A pass settled by jev carries no LLM `explanation`** — that is
+expected, not a bug. Check `judged_by` on each assertion result:
+
+| Field | Meaning |
+|---|---|
+| `judged_by` | `jev` (a confident pass jev settled on its own, no explanation) or `llm` |
+| `jev_probability` | jev's probability (0–1) that the criterion holds |
+| `jev_confidence` | Derived confidence of jev's call |
+| `escalated` | `true` when jev's answer wasn't enough and the LLM judge decided |
+
+Modes: `llm` (the LLM judge grades everything — use it when you need an explanation on every
+assertion), `jev_then_llm` (default), `shadow` (the LLM decides everything; jev's numbers are
+recorded for comparison). Tunables: `jev_pass_threshold` (0.5), `jev_confidence_floor` (0.6),
+`jev_audit_rate` (0 — fraction of jev passes also sent to the LLM, whose verdict wins).
+Asking for a jev mode where jev isn't available is a `422`.
 
 **Syntax** (same for all three flags):
 
@@ -430,7 +457,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 |---|---|
 | `anthropic/claude-sonnet-4.6` | Newest Sonnet. Default for the assistant in most scenarios. |
 | `anthropic/claude-sonnet-4.5` | One rev behind 4.6. |
-| `anthropic/claude-sonnet-4` | Eval-system default for the **simulator** (`EVAL_SIMULATOR_MODEL`). |
+| `anthropic/claude-sonnet-4` | Older Sonnet. |
 | `anthropic/claude-3.5-sonnet` | Stable older Sonnet; cheap baseline for diffs. |
 | `anthropic/claude-haiku-4.5` | Newest Haiku — fast / cheap. Good for high-volume runs or the simulator when latency matters more than nuance. |
 
@@ -443,7 +470,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 | `openai/gpt-5.2-chat` | Stable GPT-5 chat variant. |
 | `openai/gpt-4.1-mini` | Solid mid-tier. |
 | `openai/gpt-4.1-nano` | Smallest GPT-4.1 — cheap. |
-| `openai/gpt-4o` | GPT-4o via the OpenRouter pool. Default for the **judge** (`EVAL_EVALUATOR_MODEL`). |
+| `openai/gpt-4o` | GPT-4o via the OpenRouter pool. Older judge / assistant. |
 | `openai/gpt-4o-mini` | Cheap judge / assistant. |
 | `openai-direct/gpt-4o` | Same model via the **direct** OpenAI provider (skips OpenRouter pool — lower latency, different billing). |
 | `openai-direct/gpt-4o-mini` | Direct-provider 4o-mini. |

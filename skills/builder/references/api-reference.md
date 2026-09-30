@@ -80,6 +80,51 @@ All fields optional — only include what you want to change:
 
 Sets status to EDITED. FILE KBs cannot be edited (400).
 
+> **`faq_items` and `snippet_items` replace the whole list.** Whatever you leave out is deleted,
+> and the call still answers `200`. Sending one FAQ to "fix that FAQ" empties the rest of the KB.
+> To add, change or remove individual items, use `PATCH /knowledgebases/{kb_id}/items` below.
+> Only send `faq_items` / `snippet_items` here when you really mean to replace every item.
+
+### Edit individual FAQ / snippet items
+`PATCH /knowledgebases/{kb_id}/items`
+
+Add, update or delete single items without resending the rest. FAQ and SNIPPETS KBs only (any
+other type → `400`). Admin only; direct, not approval-gated.
+
+```json
+{
+  "add": [{"questions": ["What are your hours?"], "answer": "Mon–Fri 9–18."}],
+  "update": [{"id": "ITEM_ID", "answer": "New answer — other fields are kept"}],
+  "delete": ["ITEM_ID"]
+}
+```
+
+| Operation | Rules |
+|---|---|
+| `add` | Items **without** `id` — the server assigns one. FAQ: `{questions, answer}`; snippet: `{title, content}`. Added items go at the end |
+| `update` | Each needs the `id` of an existing item plus **only** the fields to change. Fields you leave out (including correction `notes`) are kept. Updated items keep their position |
+| `delete` | Ids of existing items |
+
+The patch is validated as a whole and is all-or-nothing: an unknown id is `404`, an unknown field
+(a typo like `answr`) or an id both updated and deleted is `422`, an empty patch is `400` — and in
+every case nothing is applied. Item ids come from `GET /knowledgebases/{kb_id}`.
+
+Response — a summary, not the whole KB:
+
+```json
+{
+  "kb_id": "uuid",
+  "status": "edited",
+  "item_count": 42,
+  "added": ["new-item-id"],
+  "updated": ["ITEM_ID"],
+  "deleted": ["ITEM_ID"]
+}
+```
+
+Same guards and side effects as a full `PATCH`: archived KB → `409`, training in progress → `409`,
+status becomes EDITED, and the change is searchable only after the next training.
+
 ### Archive KB
 `POST /knowledgebases/{kb_id}/archive`
 
@@ -379,7 +424,7 @@ All fields optional — only send what you want to change.
 | `url_shortener_params` | object | Query params to append: `{customParams: [{key, valueType, value?}]}` |
 | `winback_rules` | array | Follow-up campaigns — see [Follow-ups](#follow-ups-winback-rules) |
 | `winback_webhook_url` | string | LEGACY follow-up transport. Send `""` to clear it and deliver through the channel |
-| `proactive_webhook_url` | string | Bridge route that opens a conversation on the channel and answers with its id (proactive task start) |
+| `proactive_webhook_url` | string | **Deprecated — no longer read.** Proactive task starts go through a channel (`channel_id` on the start request; see `tasks.md`) |
 | `task_nudge_delay_minutes` | int | Silence, in minutes, before the assistant follows up on a live **task** |
 | `task_nudge_max` | int | Ceiling on unanswered task follow-ups |
 | `response_pacing` | string | `"none"` \| `"medium"` \| `"long"` (Kaption integration only) |
@@ -646,9 +691,28 @@ Defaults on create: `name` `"Working Hours"`, `timezone` `"UTC"`, `enabled` `tru
   ],
   "body_json": "raw JSON template with {{ param }} (used when body_type=json)",
   "data_expiration_hours": "int|null (NOT a cache — a freshness note appended to the description the LLM reads; 0=never reuse an earlier result, null=no guidance)",
-  "response_jmespath": "string|null (optional JMESPath to trim the response before the LLM sees it)"
+  "response_jmespath": "string|null (optional JMESPath to trim the response before the LLM sees it)",
+  "response_mode": "sync | async (default: sync)",
+  "is_handoff": "bool (default: false) — this tool IS the handoff; see below"
 }
 ```
+
+Reads also return **`is_managed`** (read-only, derived from `url`): whether the endpoint the tool
+calls is hosted by Studio Chat.
+
+**`response_mode: "async"`** — the call only *starts* the work; the HTTP response is an
+acknowledgement. The runtime adds a per-run `callback_url` to the body (top-level key) and to the
+`X-Studiochat-Callback-Url` header; your worker POSTs the real result there later, and the
+assistant gets a tool that returns whatever was last posted back.
+
+**`is_handoff: true`** — the tool hands the conversation to a person (a routing service that picks
+who takes over and assigns it). Every assistant that uses it hands off **only** through it: the
+built-in handoff is removed, and a successful call counts as a handoff. Don't set it on an
+ordinary tool.
+
+**Credentials are masked on every read.** Header values come back as e.g. `chk_key_••••1146`
+(content headers like `Content-Type` are shown as-is). The runtime still uses the real value.
+A **create** carrying a masked value is refused (`400`) — to copy a tool, use `/duplicate`.
 
 **URL templating uses `{{ param }}` — double braces (Jinja), not `{param}`.**
 
@@ -664,7 +728,33 @@ Defaults on create: `name` `"Working Hours"`, `timezone` `"UTC"`, `enabled` `tru
 ### Update API Tool
 `PATCH /projects/{pid}/api-tools/{tool_id}`
 
-All fields optional — same shape as create.
+All fields optional — same shape as create. Queued for approval only when the tool is referenced
+by an assistant's active or latest version; an unused tool updates directly.
+
+Masked header values may be sent back unchanged — each resolves to the credential stored under
+that header name. A saved credential is bound to the **origin** (scheme, host, port) of the URL it
+was entered for: changing `url` to a different origin while a credential header is sent masked,
+or while `headers` is omitted (which keeps the stored ones), is a `400`. Send the real value to
+move the tool.
+
+### Duplicate API Tool
+`POST /projects/{pid}/api-tools/{tool_id}/duplicate`
+
+Copies the tool into a new one in the same project, **stored credentials included** (they never
+leave the backend). Named `copy-of-<name>` (`-2`, `-3`… when taken). Admin-only, `201`, no
+approval — no assistant references the copy yet. Archived tools can be duplicated (the copy is
+live).
+
+### Test an API Tool
+`POST /projects/{pid}/api-tools/test`
+
+```json
+{"url": "https://api.example.com/orders/123", "method": "GET", "headers": {"X-API-Key": "chk_key_••••1146"}, "body": null, "tool_id": "TOOL_ID"}
+```
+
+Fires a one-off request server-side and returns the response. Pass `tool_id` to use a saved
+tool's stored credentials for any header sent masked — only when `url` has that tool's origin.
+Without `tool_id`, a masked header is refused (`400`).
 
 ### Archive / un-archive API Tool
 `POST /projects/{pid}/api-tools/{tool_id}/archive`
@@ -1332,6 +1422,30 @@ Creates a new playbook version with updated order. Body is an ordered array of s
 ["password-reset", "refund-process", "billing-inquiry"]
 ```
 
+### Context keys (what the context actually carries)
+`GET /projects/{pid}/context-keys`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `days` | int | 90 | How far back to sample (1–365) |
+| `limit` | int | 200 | Most recent conversations sampled (1–1000) |
+
+Read-only. Sample = the latest context snapshot of each conversation (previews and evals
+excluded). Response: `{sample_size, window_days, keys: [...]}`, keys sorted by coverage:
+
+| Field | Description |
+|---|---|
+| `path` | Dotted context path — the grammar of `{{ context: }}` and `enable_condition` |
+| `type` | Majority type: `string`, `number`, `boolean`, `url`, `list`, `object` |
+| `coverage` | Share (0–1) of sampled conversations that carried the key |
+| `distinct` | Distinct scalar values seen |
+| `values` | Most frequent `{value, count}`; `null` for free-text keys |
+| `examples` | Up to three example values |
+| `declared_by` | Set when a channel declares the key (it may have `coverage: 0`) |
+
+Use it before writing a condition or a context pill: conditions fail closed, so a path or value
+that never arrives silently disables the skill.
+
 ### Conditional enablement (`enable_condition`)
 
 Optional on create/update. Gates an `is_active` skill on the live conversation
@@ -1545,7 +1659,19 @@ count, and two qualifying channels mean nothing is delivered (the resolver refus
 ## Approvals
 
 Queued sandbox writes. When a write returns **202** with an `approval_id`, a human admin
-has to approve it from the Approvals panel before it executes.
+has to approve it from the Approvals panel before it executes. The 202 body also carries
+**`approval_url`**, a link that opens that exact approval in the dashboard — hand it to the
+user rather than telling them to find it.
+
+```json
+{
+  "approval_id": "uuid",
+  "approval_url": "https://…/approve/uuid",
+  "status": "pending",
+  "description": null,
+  "message": "Request queued for admin approval. Now describe it …"
+}
+```
 
 ### Describe a queued change
 `PATCH /approvals/{approval_id}/description`
@@ -1579,4 +1705,5 @@ Each marker must be on its own line. `[[before]]`/`[[after]]` are required (leav
 `GET /approvals?status=pending` · `GET /approvals/{approval_id}`
 
 Useful to check whether a queued change was approved (`status` becomes
-`executed`/`failed`) before building on top of it.
+`executed`/`failed`) before building on top of it. Each approval carries `url`, the same
+dashboard link as `approval_url`.
