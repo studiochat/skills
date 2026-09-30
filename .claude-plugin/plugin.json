@@ -1,0 +1,10 @@
+{
+  "name": "studiochat",
+  "displayName": "Studio Chat",
+  "version": "1.0.0",
+  "description": "Build, analyze, test and report on Studio Chat assistants: configuration, conversation analytics, evals and scheduled reports",
+  "author": { "name": "Studio Chat", "url": "https://studiochat.io" },
+  "homepage": "https://github.com/studiochat/skills",
+  "repository": "https://github.com/studiochat/skills",
+  "keywords": ["studiochat", "customer-support", "ai-agents", "analytics", "evals"]
+}
