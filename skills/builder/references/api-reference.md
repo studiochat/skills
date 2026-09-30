@@ -1367,7 +1367,10 @@ Creates a new playbook version with the skill added.
   "is_active": true,
   "order": 0,
   "always_load": false,
-  "enable_condition": null
+  "enable_condition": null,
+  "active_from": null,
+  "active_until": null,
+  "schedule_timezone": null
 }
 ```
 
@@ -1382,12 +1385,16 @@ Creates a new playbook version with the skill added.
 | `order` | int | Display / listing order |
 | `always_load` | bool | Inline the full content into the **static system prompt** instead of loading it on demand. Default `false` — see below |
 | `enable_condition` | object | Structured condition evaluated per turn against the live conversation context. `null` = unconditional |
+| `active_from` | datetime | Start of the schedule window. ISO-8601 with an offset, or a local time when `schedule_timezone` is sent. `null` = in effect from now — see [Scheduled window](#scheduled-window-active_from--active_until--schedule_timezone) |
+| `active_until` | datetime | End of the window (exclusive), same shapes. `null` = no end |
+| `schedule_timezone` | string | IANA zone the window is written in (`America/Guayaquil`). Shown to every viewer; never decides when the skill is in effect |
 
 **`always_load`** is for skills used in most conversations: their tokens join the
 cross-conversation prompt-cache prefix (read at ~0.1x price by every conversation) and the
 `load_skill` round-trip disappears. It only applies while the skill is enabled for the turn
-(`is_active` **and** `enable_condition` both pass). The tools and KBs an always-loaded skill
-references are visible from turn zero and are never gated behind a `load_skill` event.
+(`is_active`, the schedule window and `enable_condition` all pass). The tools and KBs an
+always-loaded skill references are visible from turn zero and are never gated behind a
+`load_skill` event.
 
 ### Update a skill
 
@@ -1404,7 +1411,9 @@ Creates a new playbook version with the skill modified. All fields optional.
 ```
 
 Send `"enable_condition": null` explicitly to **clear** a previously-set condition — omitting
-the field keeps the stored one.
+the field keeps the stored one. `active_from`, `active_until` and `schedule_timezone` follow the
+same rule; a moved bound is checked against the one that stays stored (`active_until` must be
+later than `active_from`, or 422).
 
 ### Delete a skill
 
@@ -1506,6 +1515,39 @@ Response:
 
 `valid: false` + `error` for malformed conditions; `context_found: false` when
 the conversation predates context snapshots (the condition would fail closed).
+
+### Scheduled window (`active_from` / `active_until` / `schedule_timezone`)
+
+Optional on create/update. Puts an `is_active` skill in effect only inside a time window,
+checked every turn: outside it the skill is not listed, not loadable, and its tools/KBs are not
+registered (a `{{ skill: name }}` reference gets a "not in effect" bounce from `load_skill`).
+Either bound may be `null`; the window is half-open (`active_from <= now < active_until`). The
+window is checked before `enable_condition`, and the two compose.
+
+```json
+{
+  "name": "mantenimiento-qr-ecuador",
+  "description": "Aviso vigente sobre pagos con QR: cargar antes de responder sobre pagos QR",
+  "trigger": "El cliente pregunta por pagos con QR",
+  "content": "## Mantenimiento de pagos QR...",
+  "is_active": true,
+  "active_from": "2026-10-02T08:00:00",
+  "active_until": "2026-10-02T11:00:00",
+  "schedule_timezone": "America/Guayaquil"
+}
+```
+
+- Two accepted shapes for a bound: a local time (no offset) together with `schedule_timezone`,
+  an IANA zone name; or an ISO-8601 timestamp with its own offset (`2026-10-02T08:00:00-05:00`).
+  A bare time with neither → 422. `schedule_timezone` must be an IANA name (`GMT-5` → 422).
+- Responses carry both bounds as UTC instants with an explicit offset, plus `schedule_timezone`
+  as stored. The list endpoint adds `schedule_state`: `pending`, `active`, `ended`, or `null`
+  when the skill has no window.
+- On PATCH: omitted = keep, explicit `null` = clear; a window that can never be in effect
+  (`active_from >= active_until`) → 422. Full-playbook `skills` snapshots preserve the stored
+  window for items that omit the fields, like `enable_condition`.
+- Changing the window creates a version like any other skill edit; it applies once that version
+  is the active one.
 
 ---
 

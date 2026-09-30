@@ -503,9 +503,10 @@ prompt-cache prefix (read at roughly a tenth of the price by every conversation)
 `load_skill` round-trip disappears. Use the default (`false`) for the long tail — a skill that
 is rarely relevant costs the whole prompt every turn when it is always loaded.
 
-It only applies while the skill is enabled for the turn (`is_active` **and** `enable_condition`).
-An always-loaded skill's `description` is rendered next to its content as *"When to use: …"*,
-so the description still matters.
+It only applies while the skill is enabled for the turn (`is_active`, inside its
+[schedule window](#scheduled-skills-active_from--active_until--schedule_timezone) if it has one,
+**and** `enable_condition`). An always-loaded skill's `description` is rendered next to its
+content as *"When to use: …"*, so the description still matters.
 
 One consequence worth knowing: the tools and KBs an always-loaded skill references become
 visible from **turn zero** and are never gated behind a `load_skill` event — where an on-demand
@@ -760,6 +761,90 @@ Each referenced KB / tool / action is registered in the agent **even before** th
 > There is **no** `{{ composio_tool: … }}` macro (Composio was removed).
 
 ---
+
+### Scheduled skills (`active_from` / `active_until` / `schedule_timezone`)
+
+A skill can carry a time window and is only in effect inside it. Before `active_from` and from
+`active_until` on, it gets the same treatment as a skill whose condition doesn't match: not listed
+in the system prompt, not loadable, its skill-scoped tools and KBs not registered. The window is
+checked on every turn, so the skill switches on and off **by itself** — nobody publishes a version
+at 6 AM to turn a maintenance notice on, or remembers to turn it off afterwards.
+
+Built for temporary operating rules: a provider's maintenance window, a payment rail that is down
+for a morning, a promotion with an end date.
+
+- Either bound may be omitted: only `active_until` = "in effect until then", only `active_from` =
+  "from then on". The window is half-open (`active_from <= now < active_until`).
+- **Write it in the timezone of the country the rule is for**, in one of two shapes: local times
+  plus `schedule_timezone` (an IANA name — `America/Guayaquil`, not an offset: daylight saving
+  is the zone's business), or timestamps that carry their own offset (`2026-10-02T08:00:00-05:00`).
+  A bare time with neither is refused (422): it would be read as UTC and open the window hours off.
+- The API serves both bounds as UTC instants with an explicit offset. `schedule_timezone` is the
+  zone the window is **shown and edited in** (the dashboard shows "08:00 GMT-5" to every viewer);
+  it never decides *when* the skill is in effect — the two instants do.
+
+```bash
+# QR payments in Ecuador are under maintenance tomorrow, 08:00–11:00 Ecuador time,
+# and the notice only concerns contacts in Ecuador.
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills" \
+  -X POST --body '{
+    "name": "mantenimiento-qr-ecuador",
+    "description": "Aviso vigente sobre pagos con QR: cargar antes de responder cualquier consulta sobre pagos QR",
+    "trigger": "El cliente pregunta por pagos con QR",
+    "content": "## Mantenimiento de pagos QR\nHoy de 08:00 a 11:00 los pagos con QR no están disponibles...",
+    "is_active": true,
+    "active_from": "2026-10-02T08:00:00",
+    "active_until": "2026-10-02T11:00:00",
+    "schedule_timezone": "America/Guayaquil",
+    "enable_condition": {
+      "op": "and",
+      "clauses": [{"path": "contact.country", "operator": "eq", "value": "ECU"}]
+    }
+  }'
+```
+
+**Which switch for which rule** — they compose; the window is checked before the condition:
+
+| The rule… | Set |
+|---|---|
+| applies to everyone during a window (a maintenance notice) | window + `always_load: true` — it lives in the system prompt while in effect, nothing to load, nothing left behind in conversations when it ends |
+| applies to one country / segment during a window | window + `enable_condition` |
+| applies whenever a context attribute says so, no dates | `enable_condition` alone |
+| is switched off by hand, indefinitely | `is_active: false` |
+
+**Rescheduling.** The window is mutable: `PATCH` the skill with new bounds — an omitted bound keeps
+the stored one, an explicit `null` clears it, and a moved bound is validated against the one that
+stays (`active_until` must be later than `active_from`, or 422). An expired skill given a new
+window comes back; a live one pushed to the future goes away. Like every skill edit this creates a
+new playbook version, and it takes effect once that version is the **active** one
+(`PUT /playbooks/{base_id}/active`).
+
+```bash
+# Extend the maintenance by an hour (the start stays as stored)
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/mantenimiento-qr-ecuador" \
+  -X PATCH --body '{"active_until": "2026-10-02T12:00:00", "schedule_timezone": "America/Guayaquil"}'
+
+# Remove the window: the skill is in effect all the time again
+python3 scripts/api.py \
+  "/projects/$STUDIO_PROJECT_ID/playbooks/BASE_ID/skills/mantenimiento-qr-ecuador" \
+  -X PATCH --body '{"active_from": null, "active_until": null, "schedule_timezone": null}'
+```
+
+**What conversations in progress see.** When the window opens, a conversation picks the skill up
+on its next message. When it closes, a conversation that had loaded the skill stops seeing its
+instructions from its next message on (the stored transcript keeps them, for whoever audits the
+conversation later). A `{{ skill: name }}` reference to a skill outside its window gets a bounce
+from `load_skill` — "not started, starts at …" or "ended" — and the model proceeds without it.
+
+**Checking.** `GET .../skills` returns the three fields plus `schedule_state`: `pending` (not
+started), `active`, `ended`, or `null` (no window). A skill is in effect when `is_active` is true,
+`schedule_state` is `active` or `null`, and its condition (if any) matches.
+
+**Testing before the window.** The preview and evals honour the window like production does, so a
+skill scheduled for tomorrow cannot be exercised today. Create it without a window, test it, then
+add the window with a `PATCH`.
 
 ## Tasks
 
