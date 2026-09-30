@@ -15,6 +15,10 @@ description: >
 
 # Quality Engineer
 
+> **Script paths** like `scripts/qa.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/qa.py …`.
+
 Create test cases, run evaluations, and simulate conversations to verify AI assistant behavior. All API calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
 ## Key Terminology
@@ -485,7 +489,7 @@ OpenRouter's catalog is strict; invented slugs will 422. These are the slugs act
 | `google/gemini-2.0-flash-001` | Previous Flash generation. |
 | `google/gemini-3-flash-preview` | Gemini 3 Flash preview — may change. |
 
-> **Gemini caveat**: there's a known tool-calling bias in this codebase ([docs/gemini-tool-call-bias.md](https://github.com/surfingdev/kaptbase/blob/main/docs/gemini-tool-call-bias.md)). Prefer Sonnet for the **assistant** when the playbook leans heavily on tools.
+> **Gemini caveat**: Gemini models show a known bias in tool calling on this platform. Prefer Sonnet for the **assistant** when the playbook leans heavily on tools.
 
 #### Reasoning effort suffix (GPT-5 family)
 

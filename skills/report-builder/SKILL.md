@@ -9,6 +9,10 @@ description: >
 
 # Report Builder
 
+> **Script paths** like `scripts/reports.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/reports.py …`.
+
 Create, configure, and manage automated reports via the Studio Chat Reports API. Reports are executed by SAMI in a sandbox with the `data-expert` skill — this skill focuses on *defining* reports, not executing them.
 
 ## Key Terminology

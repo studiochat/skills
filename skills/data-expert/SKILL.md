@@ -10,6 +10,10 @@ description: >
 
 # Data Expert
 
+> **Script paths** like `scripts/fetch.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/fetch.py …`.
+
 Fetch data from the Studio Chat API, process it with Python, and produce actionable analysis. All API calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
 ## Key Terminology

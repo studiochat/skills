@@ -14,6 +14,10 @@ description: >
 
 # Continuous Improvement
 
+> **Script paths:** this skill has no scripts of its own. Where it runs `../builder/scripts/api.py`,
+> that path is relative to this skill's folder and needs the `builder` skill installed next to it
+> (the plugin install does this for you).
+
 Ship a behaviour change to an assistant: add or change a policy in the instructions or
 the casuísticas (skills), validate it without polluting version history, push it through
 the approval gate, and close the loop with eval coverage. All API calls are authenticated

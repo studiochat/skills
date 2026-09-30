@@ -10,6 +10,10 @@ description: >
 
 # Builder
 
+> **Script paths** like `scripts/api.py` are relative to this skill's own folder (the one holding
+> this `SKILL.md`), not to your working directory. When the skill is installed as a plugin or
+> uploaded to Claude, run them by their full path: `python3 <this skill's folder>/scripts/api.py …`.
+
 Build and configure Studio Chat assistants using the API. All calls are authenticated automatically via environment variables. The API base URL (`https://api.studiochat.io`) is hardcoded in the scripts.
 
 **IMPORTANT: Always confirm before creating or modifying.** Never create knowledge bases,

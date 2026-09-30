@@ -42,62 +42,31 @@ These skills are **HTTP clients** — every one of them works by calling `https:
 That single fact decides where they can run, because each Claude surface sandboxes network access
 differently:
 
-| Surface | How skills are installed | Works with these skills? |
+| Surface | How to install | Works with these skills? |
 |---|---|---|
-| **Claude Code** | Filesystem — copy the folder | **Yes.** Skills get the same network access as any program on your machine |
-| **Claude Desktop / claude.ai** | Upload a `.zip` in settings | **Yes, if network egress allows `api.studiochat.io`** — see below |
+| **Claude Desktop / claude.ai / Cowork** | Add this repo as a plugin marketplace | **Yes, if network egress allows `api.studiochat.io`** — see below |
+| **Claude Code** | `/plugin marketplace add studiochat/skills` | **Yes.** Skills get the same network access as any program on your machine |
 | **Claude API** (`/v1/skills`) | Upload via the Skills API | **No.** API skills run in a container with **no network access at all** |
 | **Codex CLI, OpenCode, Gemini CLI** | Filesystem — copy the folder | **Yes.** Local CLIs, full network access |
 | **Other agents** | Copy the folder | Depends on the agent |
 
-Skills do **not** sync across surfaces. Install them separately wherever you want them.
+This repository is a **plugin marketplace**: it ships one plugin, `studiochat`, that bundles all
+five skills. Installing the plugin is the recommended route on every Claude surface, because
+updates arrive by syncing the marketplace instead of re-copying folders.
 
-### Claude Code
+### Claude Desktop, claude.ai and Cowork
 
-Filesystem-based, no upload and no packaging.
+**1. Add the marketplace.** Go to **Customize → Plugins**, click **Add**, then **Add marketplace**,
+and enter:
 
-```bash
-# Personal — available in all your projects
-cp -r skills/builder ~/.claude/skills/
-cp -r skills/data-expert ~/.claude/skills/
-
-# Or per-project, committed so your team gets them
-mkdir -p .claude/skills && cp -r skills/* .claude/skills/
+```
+studiochat/skills
 ```
 
-You can also point Claude Code at a checkout of this repo without copying anything:
+**2. Install the plugin.** Find **Studio Chat** in the marketplace and click **Add**. All five skills
+appear, each with its own toggle.
 
-```bash
-claude --add-dir /path/to/studiochat-skills
-```
-
-Claude loads a skill automatically when your request matches its `description`, or you can invoke
-one directly with `/builder`, `/data-expert`, and so on.
-
-### Claude Desktop and claude.ai
-
-Same account, same settings — the steps below cover both.
-
-**1. Turn on code execution.** Skills do not appear at all without it.
-
-- Free / Pro / Max: **Settings → Capabilities → Code execution and file creation**
-- Team / Enterprise: an owner enables **Organization settings → Skills**, both *Code execution and
-  file creation* **and** *Skills*
-
-**2. Package each skill as its own zip.** The skill folder must be the **root** of the archive, not
-nested inside another folder:
-
-```bash
-cd skills
-zip -r builder.zip builder -x '*__pycache__*' '*.DS_Store'
-zip -r data-expert.zip data-expert -x '*__pycache__*' '*.DS_Store'
-# …one zip per skill you want
-```
-
-**3. Upload.** Go to **Customize → Skills** (on some builds, **Settings → Features**), click **+**,
-then **Create skill**, and upload the zip. The skill appears in your list with a toggle.
-
-**4. Allow the API domain.** This is the step that actually decides whether they work:
+**3. Allow the API domain.** This is the step that actually decides whether they work:
 
 | Plan | Default network egress | What you need to do |
 |---|---|---|
@@ -105,10 +74,10 @@ then **Create skill**, and upload the zip. The skill appears in your list with a
 | **Team** | **Package managers only** | An owner must allow `api.studiochat.io` in **Organization settings → Capabilities** |
 | **Enterprise** | **Disabled** | An owner must enable network egress *and* allow `api.studiochat.io` |
 
-Without that, the scripts fail on every call with a connection error, even though the skill loads
-and looks fine.
+Without that, the scripts fail on every call with a connection error, even though the skills load
+and look fine.
 
-**5. Supply credentials.** There are no environment variables in this sandbox, so `STUDIO_API_TOKEN`
+**4. Supply credentials.** There are no environment variables in this sandbox, so `STUDIO_API_TOKEN`
 and `STUDIO_PROJECT_ID` cannot be preset the way they can in a terminal. Export them at the start of
 the conversation and they persist for that conversation's container:
 
@@ -117,9 +86,54 @@ the conversation and they persist for that conversation's container:
 
 Treat that conversation as holding a live credential.
 
-**Two limits worth knowing:** an uploaded skill is **private to your own account** — each teammate
-uploads their own copy, and claude.ai has no org-wide distribution for custom skills. And a skill
-uploaded here is not available in Claude Code or the API.
+**On a Team or Enterprise plan** you don't need to be an admin to add the marketplace, as long as
+the owner hasn't turned off **User-created skills** (or **Skills** altogether) in **Organization
+settings → Plugins & skills → Policy**. If **Add marketplace** doesn't appear in your **Add** menu,
+that's why — ask an owner. Code execution must also be on: **Settings → Capabilities → Code
+execution and file creation** on individual plans, **Organization settings → Plugins & skills →
+Policy** on Team and Enterprise.
+
+<details>
+<summary>Without the plugin: upload a single skill as a zip</summary>
+
+Package each skill as its own zip, with the skill folder at the **root** of the archive:
+
+```bash
+cd skills
+zip -r builder.zip builder -x '*__pycache__*' '*.DS_Store'
+```
+
+Then **Customize → Skills → + → Upload a skill**. An uploaded skill is private to your account, and
+`continuous-improvement` needs `builder` uploaded too, because it calls `builder`'s script.
+
+</details>
+
+### Claude Code
+
+```
+/plugin marketplace add studiochat/skills
+/plugin install studiochat@studiochat
+```
+
+Or from your shell: `claude plugin marketplace add studiochat/skills` and
+`claude plugin install studiochat@studiochat`. Get updates with `/plugin marketplace update studiochat`.
+
+Plugin skills are namespaced, so you invoke them as `/studiochat:builder`, `/studiochat:data-expert`
+and so on — or just describe the task and Claude loads the matching skill by its `description`.
+Export `STUDIO_API_TOKEN` and `STUDIO_PROJECT_ID` in the shell you start Claude Code from.
+
+If you'd rather not use a plugin, copy the folders instead:
+
+```bash
+# Personal — available in all your projects
+cp -r skills/* ~/.claude/skills/
+
+# Or per-project, committed so your team gets them
+mkdir -p .claude/skills && cp -r skills/* .claude/skills/
+```
+
+Skills do **not** sync across surfaces, except that Claude Code can load plugins installed in your
+claude.ai account. Install them wherever you want them.
 
 ### Claude API
 
@@ -203,7 +217,7 @@ export STUDIO_PROJECT_ID="your-project-uuid"
 
 In Claude Desktop / claude.ai there is no shell to export from ahead of time — ask Claude to run
 those two exports as the first step of the conversation instead, and they hold for the rest of it.
-See [Installation](#claude-desktop-and-claudeai).
+See [Installation](#claude-desktop-claudeai-and-cowork).
 
 ### What a key can do
 
