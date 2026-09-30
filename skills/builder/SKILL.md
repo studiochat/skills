@@ -88,14 +88,19 @@ saved filters · creating an assistant · creating an API tool · archiving an A
 > an agent can build a whole KB and still need an admin before it does anything. Plan for it:
 > tell the user the KB is ready and the training is waiting for approval.
 
-### Show the actual edit with a diff block
+### Show the change with a before/after block
 
-When the change is an **edit to existing text** — a skill's `content`, a playbook's
-instructions, a KB item, an example block, a tool description — prose alone makes the
-reviewer guess what moved. Embed a **diff block** in the description and the approvals
-panel renders it as a side-by-side before/after (red = removed, green = added), the same
-widget used for playbook version diffs. Put a short prose explanation first (the WHAT/WHY
-above), then the diff block(s):
+Prose alone makes the reviewer guess what moved. Embed a **before/after block** in the
+description and the approvals panel renders the two halves side by side (red = the old side,
+green = the new one). Put a short prose explanation first (the WHAT/WHY above), then the
+block(s).
+
+There are **two kinds** and the panel renders them differently, so pick deliberately.
+
+**`[[diff]]` — two versions of the same text.** For an edit to existing text: a skill's
+`content`, a playbook's instructions, a KB item, an example block, a tool description.
+Rendered as a line-by-line diff with `-`/`+` markers, line numbers and monospace type — the
+same widget used for playbook version diffs — so the reviewer sees exactly which line moved.
 
 ```
 [[diff]]
@@ -107,28 +112,54 @@ exacta y reintentá. Si vuelve a fallar, o si no la sabe → escalá a humano.
 [[/diff]]
 ```
 
-Rules for the diff block (the parser is strict — follow these exactly or the block
-won't render):
+Paste both halves **verbatim** — do NOT re-summarize inside the block; the prose above
+already does that. Include only the **section that actually changed** plus a line or two of
+surrounding context, not the whole skill. Big walls of unchanged text bury the change.
 
-- Each of the four markers — `[[diff]]`, `[[before]]`, `[[after]]`, `[[/diff]]` — must be
-  on its **own line**, lowercase, no spaces inside the brackets. Always close with
-  `[[/diff]]`.
+**`[[compare]]` — two different things, side by side.** For evidence rather than an edit: how
+the assistant answered before vs how it answers with the change applied, the current
+behaviour against the intended one, one policy against another. The halves are not versions
+of each other, so there is no line to point at. Rendered as two columns of normal prose with
+Markdown, no line numbers and no `-`/`+`.
+
+```
+[[compare]]
+[[before]]
+Consulta fuera de alcance, hoy:
+
+"No puedo ayudarte con eso. De todos modos, si el dolor persiste, consultá con un
+profesional antes de tomar nada."
+[[after]]
+La misma consulta, con esta sección aplicada:
+
+"No puedo ayudarte con temas médicos; solo puedo ayudarte con consultas de tu cuenta."
+[[/compare]]
+```
+
+A line diff over two unrelated texts paints the left column entirely red and the right one
+entirely green — noise dressed up as a diff. That is what `[[compare]]` avoids.
+
+**Which one:** did you paste the same text twice, edited? → `[[diff]]`. Are the two halves
+different content that shows the effect of the change? → `[[compare]]`.
+
+Rules for both kinds (the parser is strict — follow these exactly or the block won't render):
+
+- Every marker sits on its **own line**, lowercase, no spaces inside the brackets. Always
+  close the block with `[[/diff]]` or `[[/compare]]`.
 - `[[before]]` and `[[after]]` are **required**. The text between `[[before]]` and
-  `[[after]]` is the old version; the text between `[[after]]` and `[[/diff]]` is the new
-  version. Paste both **verbatim** — do NOT re-summarize inside the block; the prose above
-  already does that.
-- Include only the **section that actually changed** plus a line or two of surrounding
-  context, not the whole skill. Big walls of unchanged text bury the change.
-- For a brand-new addition leave `[[before]]` empty; for a deletion leave `[[after]]`
-  empty. (Identical before/after just renders "no difference".)
-- You may include **several** `[[diff]]…[[/diff]]` blocks in one description (e.g. two
-  separate edits in the same skill). Text outside the blocks renders normally.
+  `[[after]]` is the old side; the text between `[[after]]` and the closing marker is the new
+  one. The halves have **no** closing markers — never write `[[/before]]` or `[[/after]]`.
+- For a brand-new addition leave `[[before]]` empty; for a deletion leave `[[after]]` empty.
+  (Identical halves just render "no difference".)
+- You may include **several** blocks in one description, of either kind (e.g. two separate
+  edits in the same skill, or one edit plus the evidence behind it). Text outside the blocks
+  renders normally.
 - This is plain text inside the same `description` field — no extra API call. If the panel
   ever doesn't render it, it still reads as legible before/after text.
 
-Use a diff block for text edits; skip it for pure structural changes (linking a KB,
-toggling a setting, creating an empty object) where a before → after count in prose is
-clearer.
+Use `[[diff]]` for text edits and `[[compare]]` for behavioural evidence; skip both for pure
+structural changes (linking a KB, toggling a setting, creating an empty object) where a
+before → after count in prose is clearer.
 
 ## Key Terminology
 
