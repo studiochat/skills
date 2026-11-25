@@ -217,6 +217,47 @@ Notes:
 - In instructions: *"To schedule a demo, check slots with `{{ custom_tool: check_avail_a1b2c }}`,
   offer them, and once the user confirms one, book it with `{{ custom_tool: book_demo_c3d4e }}`."*
 
+### Team Calendar — `TEAM_CALENDAR` (api_key, optional)
+A Cal.com-like scheduler on the team's own Google Calendars, built into StudioChat. Its **people** (e.g.
+salespeople, with no StudioChat login) and **meeting types** live in StudioChat, not in a provider: manage
+them through the Team Calendar API (below). Connecting needs no credential; the optional
+`service_account_json` enables Google Workspace domain-wide delegation (people of that domain connect with
+no action of their own). Without it, adding a person returns a one-time `invite_url` to send them.
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`TEAM_CALENDAR_GET_AVAILABILITY`** | Free times of the pinned meeting type, grouped by date (read-only). Never says who is free: in `any` mode the person is picked at booking. | `event_type_id` (pin-only, from `event_types`) · `timezone` (optional, `hintable`; defaults to the meeting type's) · `max_slots` (optional config-only, 1-60, default 20) · the assistant provides `start_date`/`end_date` (ISO dates, nullable) |
+| **`TEAM_CALENDAR_BOOK_MEETING`** | Books a real meeting (irreversible — Google event + invitation). Returns `booking_id` and `with` (who it is with). | `event_type_id` (pin-only, the SAME as availability) · `attendee_email` (usually `{{deps.contact.email}}`, `hintable`) · `attendee_name` (pin or assistant, `hintable`) · `owner_id` (optional, pin-only, `identity`, a context template like `{{deps.contact.phone}}` — never a fixed value) · the assistant provides `start` (verbatim from availability), `attendee_address` (only for meeting types held at the person's address) and `notes` |
+| **`TEAM_CALENDAR_GET_MEETING`** | A booking by `booking_id`, or the upcoming ones (read-only); cancelled-in-Google shows as cancelled. | `owner_id` (optional, `identity` — the SAME as the booking pill; blank = only meetings booked in this conversation) · the assistant provides `booking_id` (nullable) |
+| **`TEAM_CALENDAR_CANCEL_MEETING`** | Cancels a booking (irreversible — Google emails everyone). Moving = cancel + book. | `owner_id` (as above) · the assistant provides `booking_id` and optional `reason` |
+
+**Discovery:** `GET .../custom-toolkits/TEAM_CALENDAR/metadata/event_types` → `[{id, name}]` of the active
+meeting types; `name` says length and mode (`"Visita comercial (60 min, anyone free)"`). Store `"<id>:<name>"`.
+
+**Meeting types and people (Team Calendar API, admin):**
+- `GET|POST /projects/{pid}/team-calendar/members` (`{name, email}` → `{member, invite_url}`),
+  `PATCH|DELETE .../members/{id}`, `POST .../members/{id}/invite` (new link), `POST .../members/{id}/check`.
+- `GET|POST /projects/{pid}/team-calendar/event-types`, `GET|PATCH|DELETE .../event-types/{id}`,
+  `GET .../event-types/{id}/availability` (what the assistant would offer now, with who is free),
+  `POST .../availability-preview` (same, for an unsaved body).
+- `GET /projects/{pid}/team-calendar/bookings?status&event_type_id&member_id&limit&offset`.
+- Over the MCP: `list_event_types`, `manage_event_types`, `manage_team_calendar_members`,
+  `list_team_calendar_bookings`.
+
+A meeting type: `name`, `duration_minutes` (5-480), `timezone`, `weekly_schedule` (the office-hours shape:
+`{monday: {enabled, slots: [{start: "09:00", end: "13:00"}]}, ...}`), `member_ids` (null = the whole team),
+`mode` (`any` = whoever is free, assigned at random · `all` = everyone free), `location_type`
+(`google_meet` · `in_person` + `location_value` · `attendee_address` · `none`), and optional
+`slot_interval_minutes`, `buffer_minutes`, `min_notice_minutes` (default 120), `max_days_ahead` (default 30).
+
+Notes:
+- **Wire availability before booking** in the instructions; give GET/CANCEL the SAME `owner_id` as the
+  booking pill, or leave all three blank to scope them to the conversation.
+- A person whose calendar can't be read counts as busy, never free (in `all` mode that means no times).
+- Caps: 3 upcoming meetings per person/inbox, and daily caps for public widgets and tests — a `too_many`
+  or `daily_cap` error means hand off to a human.
+- Preview, evals and action tests book real Google events but only ever see/cancel their own test bookings.
+
 ### Notion Databases — `NOTION_DATABASES` (api_key)
 Add entries (pages) to **existing** Notion databases — it never creates databases. Credentials:
 a Notion internal integration token (`secret_`/`ntn_`); each target database must be explicitly
