@@ -219,8 +219,8 @@ Notes:
 
 ### Team GCalendar — `TEAM_CALENDAR` (api_key)
 A Cal.com-like scheduler on the team's own Google Calendars, built into StudioChat (shown as **Team
-GCalendar**). Its **people** (e.g. salespeople, with no StudioChat login — each one is just the email of their
-Google account) and **meeting types** live in StudioChat, not in a provider: manage them through the Team
+GCalendar**). Its **people** (e.g. salespeople, with no StudioChat login: a name and the email of their Google
+account) and **meeting types** live in StudioChat, not in a provider: manage them through the Team
 Calendar API (below). It runs on Google Workspace domain-wide delegation: the connection's
 `service_account_json` (a service account key the customer's Workspace admin authorized). Adding a person
 connects them at once when the delegation covers their email, and is refused with the reason otherwise.
@@ -228,7 +228,7 @@ connects them at once when the delegation covers their email, and is refused wit
 | Action | What it does | Key params |
 |---|---|---|
 | **`TEAM_CALENDAR_GET_AVAILABILITY`** | Free times of the pinned meeting type, grouped by date (read-only). Never says who is free: in `any` mode the person is picked at booking. | `event_type_id` (pin-only, from `event_types`) · `timezone` (optional, `hintable`; defaults to the meeting type's) · `max_slots` (optional config-only, 1-60, default 20) · the assistant provides `start_date`/`end_date` (ISO dates, nullable) |
-| **`TEAM_CALENDAR_BOOK_MEETING`** | Books a real meeting (irreversible — Google event + invitation). Returns `booking_id` and `with` (the emails of who it is with). | `event_type_id` (pin-only, the SAME as availability) · `attendee_email` (usually `{{deps.contact.email}}`, `hintable`) · `attendee_name` (pin or assistant, `hintable`) · `owner_id` (optional, pin-only, `identity`, a context template like `{{deps.contact.phone}}` — never a fixed value) · the assistant provides `start` (verbatim from availability), `attendee_address` (only for meeting types held at the person's address) and `notes` |
+| **`TEAM_CALENDAR_BOOK_MEETING`** | Books a real meeting (irreversible — Google event + invitation). Returns `booking_id` and `with` (the names of who it is with). | `event_type_id` (pin-only, the SAME as availability) · `attendee_email` (usually `{{deps.contact.email}}`, `hintable`) · `attendee_name` (pin or assistant, `hintable`) · `owner_id` (optional, pin-only, `identity`, a context template like `{{deps.contact.phone}}` — never a fixed value) · the assistant provides `start` (verbatim from availability), `attendee_address` (only for meeting types held at the person's address) and `notes` |
 | **`TEAM_CALENDAR_GET_MEETING`** | A booking by `booking_id`, or the upcoming ones (read-only); cancelled-in-Google shows as cancelled. | `owner_id` (optional, `identity` — the SAME as the booking pill; blank = only meetings booked in this conversation) · the assistant provides `booking_id` (nullable) |
 | **`TEAM_CALENDAR_CANCEL_MEETING`** | Cancels a booking (irreversible — Google emails everyone). Moving = cancel + book. | `owner_id` (as above) · the assistant provides `booking_id` and optional `reason` |
 
@@ -236,8 +236,8 @@ connects them at once when the delegation covers their email, and is refused wit
 meeting types; `name` says length and mode (`"Visita comercial (60 min, anyone free)"`). Store `"<id>:<name>"`.
 
 **Meeting types and people (Team Calendar API, admin):**
-- `GET|POST /projects/{pid}/team-calendar/members` (`{email}` → `{member}`), `DELETE .../members/{id}`,
-  `POST .../members/{id}/check` (re-test their access).
+- `GET|POST /projects/{pid}/team-calendar/members` (`{name, email}` → `{member}`),
+  `PATCH|DELETE .../members/{id}` (rename / remove), `POST .../members/{id}/check` (re-test their access).
 - `GET|POST /projects/{pid}/team-calendar/event-types`, `GET|PATCH|DELETE .../event-types/{id}`,
   `GET .../event-types/{id}/availability` (what the assistant would offer now, with who is free),
   `POST .../availability-preview` (same, for an unsaved body).
