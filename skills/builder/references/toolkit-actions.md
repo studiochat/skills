@@ -241,7 +241,13 @@ meeting types; `name` says length and mode (`"Visita comercial (60 min, anyone f
 - `GET|POST /projects/{pid}/team-calendar/event-types`, `GET|PATCH|DELETE .../event-types/{id}`,
   `GET .../event-types/{id}/availability` (what the assistant would offer now, with who is free),
   `POST .../availability-preview` (same, for an unsaved body).
-- Over the MCP: `list_event_types`, `manage_event_types`, `manage_team_calendar_members`.
+- Over the MCP: `configure_team_calendar` (`status`: connected?, the `client_id` + scopes the customer's
+  Workspace admin authorizes, the `toolkit_connection_id` for pills · `connect`: returns a one-time link where a
+  PERSON pastes the key — never ask for the key in the chat · `cancel_upload` · `disconnect`),
+  `list_event_types`, `manage_event_types` (incl. `preview` of an unsaved type), `manage_team_calendar_members`.
+  End to end: status → connect (person uploads the key) → add people → create the meeting type → one pill per
+  action with `create_tool_configuration` → macros in the skill → `test_toolkit_action` (availability freely; a
+  booking is a real event on a salesperson's calendar, even in the test pool).
 - StudioChat keeps no record of the meetings: Google Calendar is the record (our events carry private tags),
   and usage comes from the toolkit's analytics. A meeting the salesperson moves or deletes in Google reads that way.
 
