@@ -217,6 +217,56 @@ Notes:
 - In instructions: *"To schedule a demo, check slots with `{{ custom_tool: check_avail_a1b2c }}`,
   offer them, and once the user confirms one, book it with `{{ custom_tool: book_demo_c3d4e }}`."*
 
+### Team GCalendar — `TEAM_CALENDAR` (api_key)
+A Cal.com-like scheduler on the team's own Google Calendars, built into StudioChat (shown as **Team
+GCalendar**). Its **people** (e.g. salespeople, with no StudioChat login: a name and the email of their Google
+account) and **meeting types** live in StudioChat, not in a provider: manage them through the Team
+Calendar API (below). It runs on Google Workspace domain-wide delegation: the connection's
+`service_account_json` (a service account key the customer's Workspace admin authorized). Adding a person
+connects them at once when the delegation covers their email, and is refused with the reason otherwise.
+
+| Action | What it does | Key params |
+|---|---|---|
+| **`TEAM_CALENDAR_GET_AVAILABILITY`** | Free times of the pinned meeting type, grouped by date (read-only). Never says who is free: in `any` mode the person is picked at booking. | `event_type_id` (pin-only, from `event_types`) · `timezone` (optional, `hintable`; defaults to the meeting type's) · `max_slots` (optional config-only, 1-60, default 20) · the assistant provides `start_date`/`end_date` (ISO dates, nullable) |
+| **`TEAM_CALENDAR_BOOK_MEETING`** | Books a real meeting (irreversible — a Google event on the salesperson's calendar; Google emails an invitation only when there is an email). Needs the person's phone OR email. Returns `booking_id`, `with` (the names of who it is with) and `invitation_sent`. | `event_type_id` (pin-only, the SAME as availability) · `attendee_phone` (on WhatsApp pin it to `{{context.contact.phone}}`; then the assistant does not ask for an email) · `attendee_email` (optional, `{{deps.contact.email}}` or asked, `hintable`) · `attendee_name` (pin or assistant, `hintable`) · `owner_id` (optional, pin-only, `identity`, a context template like `{{deps.contact.phone}}` — never a fixed value) · the assistant provides `start` (verbatim from availability), `attendee_address` (only for meeting types held at the person's address) and `notes` |
+| **`TEAM_CALENDAR_GET_MEETING`** | A booking by `booking_id`, or the upcoming ones (read-only); cancelled-in-Google shows as cancelled. | `owner_id` (optional, `identity` — the SAME as the booking pill; blank = only meetings booked in this conversation) · the assistant provides `booking_id` (nullable) |
+| **`TEAM_CALENDAR_CANCEL_MEETING`** | Cancels a booking (irreversible — Google emails everyone). Moving = cancel + book. | `owner_id` (as above) · the assistant provides `booking_id` and optional `reason` |
+
+**Discovery:** `GET .../custom-toolkits/TEAM_CALENDAR/metadata/event_types` → `[{id, name}]` of the active
+meeting types; `name` says length and mode (`"Visita comercial (60 min, anyone free)"`). Store `"<id>:<name>"`.
+
+**Meeting types and people (Team Calendar API, admin):**
+- `GET|POST /projects/{pid}/team-calendar/members` (`{name, email}` → `{member}`),
+  `PATCH|DELETE .../members/{id}` (rename / remove), `POST .../members/{id}/check` (re-test their access).
+- `GET|POST /projects/{pid}/team-calendar/event-types`, `GET|PATCH|DELETE .../event-types/{id}`,
+  `GET .../event-types/{id}/availability` (what the assistant would offer now, with who is free),
+  `POST .../availability-preview` (same, for an unsaved body).
+- Connecting (pasting the service account key) is done in the dashboard, never over the MCP — never ask for the
+  key in the chat. Everything else is MCP: `list_toolkits` (slug TEAM_CALENDAR, detail='status') for the
+  connection id, `manage_team_calendar_members`, `manage_event_types` (incl. `preview` of an unsaved type),
+  `list_event_types` (with availability). End to end: add people → create the meeting type → one pill per action
+  with `create_tool_configuration` → macros in the skill → `check_macros` → `test_toolkit_action` (availability
+  freely; a booking is a real event on a salesperson's calendar, even in the test pool).
+- StudioChat keeps no record of the meetings: Google Calendar is the record (our events carry private tags),
+  and usage comes from the toolkit's analytics. A meeting the salesperson moves or deletes in Google reads that way.
+
+A meeting type: `name`, `duration_minutes` (5-480), `timezone`, `weekly_schedule` (the office-hours shape:
+`{monday: {enabled, slots: [{start: "09:00", end: "13:00"}]}, ...}`), `member_ids` (null = the whole team),
+`mode` (`any` = whoever is free, assigned at random · `all` = everyone free), `location_type`
+(`google_meet` · `in_person` + `location_value` · `attendee_address` · `none`), and optional
+`slot_interval_minutes`, `buffer_minutes`, `min_notice_minutes` (default 120), `max_days_ahead` (default 30).
+
+Notes:
+- **Wire availability before booking** in the instructions; give GET/CANCEL the SAME `owner_id` as the
+  booking pill, or leave all three blank to scope them to the conversation.
+- A person whose calendar can't be read counts as busy, never free (in `all` mode that means no times).
+- The event's title and description are read by everyone invited (Google has no organizer-only notes): the
+  title is `<Account> · <meeting type> · <salesperson> & <person>` and the description starts with the person's
+  contact. Notes must be fit for the person to read.
+- Caps: 3 upcoming meetings per conversation/owner and per contact, project-wide caps for public widgets and
+  tests, 6 bookings a day per conversation — a `too_many` or `channel_cap` error means hand off to a human.
+- Preview, evals and action tests book real Google events but only ever see/cancel their own test bookings.
+
 ### Notion Databases — `NOTION_DATABASES` (api_key)
 Add entries (pages) to **existing** Notion databases — it never creates databases. Credentials:
 a Notion internal integration token (`secret_`/`ntn_`); each target database must be explicitly
