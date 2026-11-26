@@ -228,7 +228,7 @@ connects them at once when the delegation covers their email, and is refused wit
 | Action | What it does | Key params |
 |---|---|---|
 | **`TEAM_CALENDAR_GET_AVAILABILITY`** | Free times of the pinned meeting type, grouped by date (read-only). Never says who is free: in `any` mode the person is picked at booking. | `event_type_id` (pin-only, from `event_types`) · `timezone` (optional, `hintable`; defaults to the meeting type's) · `max_slots` (optional config-only, 1-60, default 20) · the assistant provides `start_date`/`end_date` (ISO dates, nullable) |
-| **`TEAM_CALENDAR_BOOK_MEETING`** | Books a real meeting (irreversible — Google event + invitation). Returns `booking_id` and `with` (the names of who it is with). | `event_type_id` (pin-only, the SAME as availability) · `attendee_email` (usually `{{deps.contact.email}}`, `hintable`) · `attendee_name` (pin or assistant, `hintable`) · `owner_id` (optional, pin-only, `identity`, a context template like `{{deps.contact.phone}}` — never a fixed value) · the assistant provides `start` (verbatim from availability), `attendee_address` (only for meeting types held at the person's address) and `notes` |
+| **`TEAM_CALENDAR_BOOK_MEETING`** | Books a real meeting (irreversible — a Google event on the salesperson's calendar; Google emails an invitation only when there is an email). Needs the person's phone OR email. Returns `booking_id`, `with` (the names of who it is with) and `invitation_sent`. | `event_type_id` (pin-only, the SAME as availability) · `attendee_phone` (on WhatsApp pin it to `{{context.contact.phone}}`; then the assistant does not ask for an email) · `attendee_email` (optional, `{{deps.contact.email}}` or asked, `hintable`) · `attendee_name` (pin or assistant, `hintable`) · `owner_id` (optional, pin-only, `identity`, a context template like `{{deps.contact.phone}}` — never a fixed value) · the assistant provides `start` (verbatim from availability), `attendee_address` (only for meeting types held at the person's address) and `notes` |
 | **`TEAM_CALENDAR_GET_MEETING`** | A booking by `booking_id`, or the upcoming ones (read-only); cancelled-in-Google shows as cancelled. | `owner_id` (optional, `identity` — the SAME as the booking pill; blank = only meetings booked in this conversation) · the assistant provides `booking_id` (nullable) |
 | **`TEAM_CALENDAR_CANCEL_MEETING`** | Cancels a booking (irreversible — Google emails everyone). Moving = cancel + book. | `owner_id` (as above) · the assistant provides `booking_id` and optional `reason` |
 
@@ -241,9 +241,9 @@ meeting types; `name` says length and mode (`"Visita comercial (60 min, anyone f
 - `GET|POST /projects/{pid}/team-calendar/event-types`, `GET|PATCH|DELETE .../event-types/{id}`,
   `GET .../event-types/{id}/availability` (what the assistant would offer now, with who is free),
   `POST .../availability-preview` (same, for an unsaved body).
-- `GET /projects/{pid}/team-calendar/bookings?status&event_type_id&member_id&limit&offset`.
-- Over the MCP: `list_event_types`, `manage_event_types`, `manage_team_calendar_members`,
-  `list_team_calendar_bookings`.
+- Over the MCP: `list_event_types`, `manage_event_types`, `manage_team_calendar_members`.
+- StudioChat keeps no record of the meetings: Google Calendar is the record (our events carry private tags),
+  and usage comes from the toolkit's analytics. A meeting the salesperson moves or deletes in Google reads that way.
 
 A meeting type: `name`, `duration_minutes` (5-480), `timezone`, `weekly_schedule` (the office-hours shape:
 `{monday: {enabled, slots: [{start: "09:00", end: "13:00"}]}, ...}`), `member_ids` (null = the whole team),
@@ -255,8 +255,11 @@ Notes:
 - **Wire availability before booking** in the instructions; give GET/CANCEL the SAME `owner_id` as the
   booking pill, or leave all three blank to scope them to the conversation.
 - A person whose calendar can't be read counts as busy, never free (in `all` mode that means no times).
-- Caps: 3 upcoming meetings per person/inbox, and daily caps for public widgets and tests — a `too_many`
-  or `daily_cap` error means hand off to a human.
+- The event's title and description are read by everyone invited (Google has no organizer-only notes): the
+  title is `<Account> · <meeting type> · <salesperson> & <person>` and the description starts with the person's
+  contact. Notes must be fit for the person to read.
+- Caps: 3 upcoming meetings per conversation/owner and per contact, project-wide caps for public widgets and
+  tests, 6 bookings a day per conversation — a `too_many` or `channel_cap` error means hand off to a human.
 - Preview, evals and action tests book real Google events but only ever see/cancel their own test bookings.
 
 ### Notion Databases — `NOTION_DATABASES` (api_key)
